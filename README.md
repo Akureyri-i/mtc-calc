@@ -15,7 +15,7 @@
 
 <br>
 
-MTC Calculator sits on top of Roblox while you crew the artillery in Multicrew Tank Combat. Mark targets on the map the way you always do: it works out the elevation, azimuth and charge for each one and shows them right beside the game's own readouts.
+MTC Calculator sits on top of Roblox while you crew the artillery in [Multicrew Tank Combat](https://www.roblox.com/games/95721658376580/Multicrew-Tank-Combat). Mark targets on the map the way you always do: it works out the elevation, azimuth and charge for each one and shows them right beside the game's own readouts.
 
 > [!NOTE]
 > It only looks at the picture on your screen. It does not read the game's memory, inject anything into Roblox, or send a single keystroke or click to the game. Aiming, loading and firing stay yours.
@@ -63,7 +63,7 @@ MTC Calculator sits on top of Roblox while you crew the artillery in Multicrew T
 ## Getting started
 
 1. Download `MTC-Calculator.exe` from [Releases](https://github.com/Akureyri-i/mtc-calc/releases/latest) and put it anywhere. There is nothing to install.
-2. Start Roblox, join Multicrew Tank Combat, then run `MTC-Calculator.exe`.
+2. Start Roblox, join [Multicrew Tank Combat](https://www.roblox.com/games/95721658376580/Multicrew-Tank-Combat), then run `MTC-Calculator.exe`.
 3. Take an artillery seat and open the full map once. Mark targets as usual.
 
 It has no window of its own: look for its icon in the notification area at the bottom right of the screen. Right-click it to open the log folder or quit.

@@ -15,7 +15,7 @@
 
 <br>
 
-在 Multicrew Tank Combat 里玩火炮时，MTC Calculator 叠在 Roblox 画面上工作。你照常在地图上标点，它算出每个目标的仰角、方位和装药，直接显示在游戏自己的读数旁边。
+在 [Multicrew Tank Combat](https://www.roblox.com/games/95721658376580/Multicrew-Tank-Combat) 里玩火炮时，MTC Calculator 叠在 Roblox 画面上工作。你照常在地图上标点，它算出每个目标的仰角、方位和装药，直接显示在游戏自己的读数旁边。
 
 > [!NOTE]
 > 它只看你屏幕上的画面：不读游戏内存，不往 Roblox 里注入任何东西，也不会替你按任何一个键、点任何一下鼠标。瞄准、装填、开火都由你自己来。
@@ -63,7 +63,7 @@
 ## 开始使用
 
 1. 从 [Releases](https://github.com/Akureyri-i/mtc-calc/releases/latest) 下载 `MTC-Calculator.exe`，放在任意位置，不用安装。
-2. 打开 Roblox 进入 Multicrew Tank Combat，再运行 `MTC-Calculator.exe`。
+2. 打开 Roblox 进入 [Multicrew Tank Combat](https://www.roblox.com/games/95721658376580/Multicrew-Tank-Combat)，再运行 `MTC-Calculator.exe`。
 3. 坐上火炮，打开一次大地图，照常标点就行。
 
 它没有自己的窗口：屏幕右下角通知区里有它的图标，右键可以打开日志文件夹或退出。
