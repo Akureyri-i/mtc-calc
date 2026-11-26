@@ -26,6 +26,17 @@
   <sub>真实对局的回放：在大地图上每标一个点，就多出它的装药、飞行时间和弹道。</sub>
 </p>
 
+<table>
+  <tr>
+    <td width="50%" align="center"><img src="assets/readme/aim-off.webp" alt="指示条贴着游戏读数，显示还要抬多少、转多少"></td>
+    <td width="50%" align="center"><img src="assets/readme/aim-on.webp" alt="对准后指示条两个圈都变绿"></td>
+  </tr>
+  <tr>
+    <td valign="top"><sub>坐在炮手位时，指示条（左）贴着游戏自己的读数（右），告诉你目标角度，以及还要抬多少、转多少。</sub></td>
+    <td valign="top"><sub>进入容差范围后，两个圈都变绿，可以开火了。</sub></td>
+  </tr>
+</table>
+
 ## 能做什么
 
 <table>

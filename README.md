@@ -26,6 +26,17 @@ MTC Calculator sits on top of Roblox while you crew the artillery in [Multicrew 
   <sub>A real match replayed: each marker you place on the full map gets its charge, flight time and arcs.</sub>
 </p>
 
+<table>
+  <tr>
+    <td width="50%" align="center"><img src="assets/readme/aim-off.webp" alt="The aim strip beside the game's readout, showing how far to raise and turn"></td>
+    <td width="50%" align="center"><img src="assets/readme/aim-on.webp" alt="The aim strip on target, both marks green"></td>
+  </tr>
+  <tr>
+    <td valign="top"><sub>At the gun, the aim strip (left) sits beside the game's own readout (right): the target's angles and how far you still have to raise and turn.</sub></td>
+    <td valign="top"><sub>Within the tolerance, both marks turn green: fire.</sub></td>
+  </tr>
+</table>
+
 ## What it does
 
 <table>
