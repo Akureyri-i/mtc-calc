@@ -114,13 +114,12 @@ impl Session {
     }
 }
 
-/// Repository root `datasets/` directory.
+/// The repository's `datasets/` folder: the nearest one at or above the current folder (tests run
+/// in their crate's folder, the tools at the repository root). Found at run time so the build
+/// keeps no folder of the machine it was made on.
 pub fn datasets_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .expect("crate lives in <root>/crates/<name>")
-        .join("datasets")
+    let here = std::env::current_dir().unwrap_or_default();
+    here.ancestors().map(|d| d.join("datasets")).find(|d| d.is_dir()).unwrap_or_else(|| here.join("datasets"))
 }
 
 /// Whether the recorded sessions are on this machine (`datasets/`, kept out of the public

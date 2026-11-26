@@ -73,7 +73,7 @@ impl SeatWatch {
             crate::diag::note(crate::diag::Event::SeatRead(m.own_known && m.mine().is_some()));
             let line = describe(m);
             if self.last_line.as_ref() != Some(&line) {
-                println!("{line}");
+                log::info!("{line}");
                 self.last_line = Some(line);
             }
         }
@@ -85,10 +85,10 @@ impl SeatWatch {
                 self.click_line.as_deref() != Some(describe(m).as_str()) && if m.own_known { m.mine().is_some() } else { m.rows.iter().any(|r| r.taken) }
             });
             if settled {
-                println!("Seats: new seat read {ms} ms after the menu was clicked");
+                log::info!("Seats: new seat read {ms} ms after the menu was clicked");
                 self.clicked_at = None;
             } else if ms > CLICK_WINDOW_MS {
-                println!("Seats: menu clicked, no new seat read within {CLICK_WINDOW_MS} ms");
+                log::info!("Seats: menu clicked, no new seat read within {CLICK_WINDOW_MS} ms");
                 self.clicked_at = None;
             }
         }

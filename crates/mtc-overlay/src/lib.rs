@@ -260,7 +260,7 @@ fn follow_drags(map_window: &mut map_marks::MapWindow, drag_window: &mut map_mar
                 draws.1.fetch_add(started.elapsed().as_micros() as u64, Ordering::Relaxed);
             }
             Ok(false) => {}
-            Err(error) => eprintln!("overlay: {error}"),
+            Err(error) => log::warn!("overlay: {error}"),
         }
     }
     if drag_window.active()
@@ -271,7 +271,7 @@ fn follow_drags(map_window: &mut map_marks::MapWindow, drag_window: &mut map_mar
         // `target`: a start the game had not shown yet does not count).
         let start = drag_start(&track, press, pressed_at, map_marks::MARKER_DRAG_THRESHOLD_PX).filter(|(t, _)| *t <= target).map(|(_, from)| from);
         if let Err(error) = drag_window.follow(c, start) {
-            eprintln!("overlay: {error}");
+            log::warn!("overlay: {error}");
         }
     }
     if map_window.commits() + drag_window.commits() != commits {
@@ -644,14 +644,14 @@ fn run(rx: Receiver<Command>, actions: Sender<PanelAction>, font_dir: std::path:
                     .and_then(|()| consent_window.show_consent(None))
             };
             if let Err(error) = result {
-                eprintln!("overlay: {error}");
+                log::warn!("overlay: {error}");
             }
         }
         // A driver update or reset loses the device all five windows draw with: new devices, every
         // surface made again and redrawn; retried each second until it works.
         if (stale || graphics.lost()) && std::time::Instant::now() >= retry_at {
             if !stale {
-                eprintln!("overlay: graphics device lost");
+                log::warn!("overlay: graphics device lost");
             }
             stale = true;
             let rebuilt = graphics.recover().and_then(|()| {
@@ -667,11 +667,11 @@ fn run(rx: Receiver<Command>, actions: Sender<PanelAction>, font_dir: std::path:
             match rebuilt {
                 Ok(()) => {
                     stale = false;
-                    eprintln!("overlay: windows rebuilt on new graphics devices");
+                    log::warn!("overlay: windows rebuilt on new graphics devices");
                 }
                 Err(error) => {
                     retry_at = std::time::Instant::now() + Duration::from_secs(1);
-                    eprintln!("overlay: rebuilding the windows: {error}");
+                    log::warn!("overlay: rebuilding the windows: {error}");
                 }
             }
         }
@@ -690,12 +690,12 @@ fn run(rx: Receiver<Command>, actions: Sender<PanelAction>, font_dir: std::path:
         if redraws_logged.elapsed() >= Duration::from_secs(5) {
             redraws_logged = std::time::Instant::now();
             if let Some(line) = pace.take_report() {
-                println!("{line}");
+                log::info!("{line}");
             }
             let redraws = map_window.take_redraws();
             if !redraws.is_empty() {
                 let parts: Vec<String> = redraws.iter().rev().map(|(why, n)| format!("{} {n}", why.name())).collect();
-                println!("[overlay] map marks redrawn (5 s): {}", parts.join(" · "));
+                log::info!("[overlay] map marks redrawn (5 s): {}", parts.join(" · "));
             }
         }
         for event in window::take_mouse() {
@@ -761,7 +761,7 @@ fn run(rx: Receiver<Command>, actions: Sender<PanelAction>, font_dir: std::path:
                 _ => Ok(()),
             };
             if let Err(error) = result {
-                eprintln!("overlay: {error}");
+                log::warn!("overlay: {error}");
             }
         }
         let first = if open && (map_window.following() || drag_window.active() || panel_window.dragging()) {
@@ -837,31 +837,31 @@ fn run(rx: Receiver<Command>, actions: Sender<PanelAction>, font_dir: std::path:
         if let Some(state) = aim {
             timing.strip(t);
             if let Err(error) = strip_window.show(state.as_ref()) {
-                eprintln!("overlay: {error}");
+                log::warn!("overlay: {error}");
             }
         }
         let t = timing.lap(0, t);
         if let Some(state) = panel
             && let Err(error) = panel_window.show(state.as_ref())
         {
-            eprintln!("overlay: {error}");
+            log::warn!("overlay: {error}");
         }
         let t = timing.lap(1, t);
         // The plan panel before the map's marks: a V1 switch shows its panel first.
         if let Some(state) = plan
             && let Err(error) = plan_window.show(state.as_ref())
         {
-            eprintln!("overlay: {error}");
+            log::warn!("overlay: {error}");
         }
         if let Some(state) = settings
             && let Err(error) = settings_window.show(state.as_ref())
         {
-            eprintln!("overlay: {error}");
+            log::warn!("overlay: {error}");
         }
         if let Some(state) = consent
             && let Err(error) = consent_window.show_consent(state.as_ref())
         {
-            eprintln!("overlay: {error}");
+            log::warn!("overlay: {error}");
         }
         let t = timing.lap(2, t);
         if let Some(state) = map {
@@ -872,7 +872,7 @@ fn run(rx: Receiver<Command>, actions: Sender<PanelAction>, font_dir: std::path:
                     map_draws.1.fetch_add(started.elapsed().as_micros() as u64, Ordering::Relaxed);
                 }
                 Ok(false) => {}
-                Err(error) => eprintln!("overlay: {error}"),
+                Err(error) => log::warn!("overlay: {error}"),
             }
             // New marks while following a drag are folded in at once.
             follow_drags(&mut map_window, &mut drag_window, map_draws, &mut pace);
@@ -881,13 +881,13 @@ fn run(rx: Receiver<Command>, actions: Sender<PanelAction>, font_dir: std::path:
         if let Some(state) = charges
             && let Err(error) = charge_window.show(state.as_ref())
         {
-            eprintln!("overlay: {error}");
+            log::warn!("overlay: {error}");
         }
         let t = timing.lap(4, t);
         if let Some(state) = drag
             && let Err(error) = drag_window.show(state.as_ref(), window::cursor())
         {
-            eprintln!("overlay: {error}");
+            log::warn!("overlay: {error}");
         }
         timing.lap(5, t);
         keep_settings_on_top(&settings_window);
@@ -941,7 +941,7 @@ impl DrawTiming {
             *self = Self { last_strip: self.last_strip, ..Self::new() };
             return;
         }
-        println!(
+        log::info!(
             "[overlay] aim strip updates {:.0}/s, longest gap {:.0} ms; slowest draw: {} {:.1} ms",
             f64::from(self.strips) / elapsed.as_secs_f64(),
             self.strip_gap.as_secs_f64() * 1000.0,

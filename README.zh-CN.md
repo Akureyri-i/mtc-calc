@@ -58,13 +58,15 @@
 - 在地图上画出预测落点，也能认出每发炮弹实际落在哪里。
 - 任何窗口大小、任何 Windows 显示缩放都能用。
 - 第一次用时自动下载地图图片、高度图和弹药数据，之后自己保持最新。
-- 占用很低：我们实测的对局里平均约 0.15 个 CPU 核心，内存不到 100 MB。
+- 占用不高：我们实测的对局里约 0.15 到 0.3 个 CPU 核心，内存 100 到 200 MB。
 
 ## 开始使用
 
-1. 从 [Releases](https://github.com/Akureyri-i/mtc-calc/releases/latest) 下载最新版本，解压到任意位置。
-2. 打开 Roblox 进入 Multicrew Tank Combat，再运行 `mtc-hud.exe`。
+1. 从 [Releases](https://github.com/Akureyri-i/mtc-calc/releases/latest) 下载 `MTC-Calculator.exe`，放在任意位置，不用安装。
+2. 打开 Roblox 进入 Multicrew Tank Combat，再运行 `MTC-Calculator.exe`。
 3. 坐上火炮，打开一次大地图，照常标点就行。
+
+它没有自己的窗口：屏幕右下角通知区里有它的图标，右键可以打开日志文件夹或退出。
 
 需要 64 位的 Windows 10 或 11，以及 Roblox 桌面版。
 
@@ -95,6 +97,12 @@
 </details>
 
 <details>
+<summary><b>Windows 提示“已保护你的电脑”，安全吗？</b></summary>
+<br>
+没有花钱买证书签名的程序，Windows 都会这样提示，这个程序就没有签名。点“更多信息”，再点“仍要运行”就行。源代码全部公开在这里，你也可以自己编译（见下文）。
+</details>
+
+<details>
 <summary><b>出问题了怎么反馈？</b></summary>
 <br>
 打开设置，在“Problem report”下点“Create report”，把打开的文件夹附到 GitHub Issue 里。如果问题是看得见的，勾上“Screenshots”；截图里的玩家名字会被涂黑。
@@ -108,6 +116,8 @@
 cargo build --release
 cargo test --release
 ```
+
+这样编出来的程序会开一个控制台窗口显示输出，开发时方便。发布版用 `cargo build --release -p mtc-hud --features gui` 编译：没有控制台，输出只写进日志文件。
 
 需要游戏录像的测试在本机没有录像时会自动跳过。
 

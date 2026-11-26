@@ -144,7 +144,7 @@ fn report_drag(samples: &[DragSample], arrivals: &[(Instant, Instant)]) {
     let game: Vec<(Instant, (f64, f64))> = samples.iter().filter_map(|s| Some((s.t, s.game?))).collect();
     let both: Vec<(Instant, (f64, f64), (f64, f64))> = samples.iter().filter_map(|s| Some((s.t, s.game?, s.hud?))).collect();
     if game.len() < 10 || both.len() < 10 {
-        println!("Drag probe: this drag showed the game's diamond on {} frames and both on {}, too few", game.len(), both.len());
+        log::info!("Drag probe: this drag showed the game's diamond on {} frames and both on {}, too few", game.len(), both.len());
         return;
     }
     let t0 = game[0].0;
@@ -173,7 +173,7 @@ fn report_drag(samples: &[DragSample], arrivals: &[(Instant, Instant)]) {
     let p95 = apart[apart.len() * 95 / 100];
     let path: f64 = game.windows(2).map(|w| (w[1].1.0 - w[0].1.0).hypot(w[1].1.1 - w[0].1.1)).sum();
     let secs = game.last().map_or(0.0, |(t, _)| at(*t)) / 1000.0;
-    println!(
+    log::info!(
         "Drag probe: {} frames ({} with the game's diamond), dragged at {:.0} px/s; marks from the game's diamond on screen median {:.1} px, p95 {p95:.1} px; by time the marks fit best {best} ms behind the game (median {best_miss:.1} px)",
         samples.len(),
         game.len(),
@@ -204,7 +204,7 @@ fn report_drag(samples: &[DragSample], arrivals: &[(Instant, Instant)]) {
     }
     if !lags.is_empty() {
         lags.sort_by(f64::total_cmp);
-        println!(
+        log::info!(
             "Drag probe, frame changes: the game's diamond moved {} times; the marks moved in the same picture {} times, one picture late {}, two late {}, three or more late {} (late median {:.1} ms); the marks moved first {hud_first} times",
             counts.iter().sum::<u32>(),
             counts[0],
@@ -250,11 +250,11 @@ fn run(shared: &Mutex<Shared>, plan_offset: (i32, i32), marks_offset: (i32, i32)
     let mut duplication = match open() {
         Ok(d) => d,
         Err(e) => {
-            eprintln!("Latency measurement unavailable: {e}");
+            log::warn!("Latency measurement unavailable: {e}");
             return;
         }
     };
-    println!("Latency measurement: a line each time the full map opens or closes (key, game picture, HUD recognition, HUD picture, one clock)");
+    log::info!("Latency measurement: a line each time the full map opens or closes (key, game picture, HUD recognition, HUD picture, one clock)");
     let (mut game, mut hud, mut drawn): (Option<bool>, Option<bool>, Option<bool>) = (None, None, None);
     let (mut pending, mut pending_marks): (Option<Flip>, Option<Flip>) = (None, None);
     // Staging textures made once: the V1 hint row and the plan panel's marker.
@@ -268,7 +268,7 @@ fn run(shared: &Mutex<Shared>, plan_offset: (i32, i32), marks_offset: (i32, i32)
     let mut failures: Vec<String> = Vec::new();
     let mut fail = |what: String| {
         if !failures.contains(&what) {
-            eprintln!("Latency measurement: {what}");
+            log::warn!("Latency measurement: {what}");
             failures.push(what);
         }
     };
@@ -282,14 +282,14 @@ fn run(shared: &Mutex<Shared>, plan_offset: (i32, i32), marks_offset: (i32, i32)
                 match open() {
                     Ok(d) => duplication = d,
                     Err(e) => {
-                        eprintln!("Latency measurement stopped: {e}");
+                        log::warn!("Latency measurement stopped: {e}");
                         return;
                     }
                 }
                 continue;
             }
             Err(e) => {
-                eprintln!("Latency measurement: {e}");
+                log::warn!("Latency measurement: {e}");
                 std::thread::sleep(Duration::from_secs(1));
                 continue;
             }
@@ -359,7 +359,7 @@ fn run(shared: &Mutex<Shared>, plan_offset: (i32, i32), marks_offset: (i32, i32)
             match (make(hints.2, hints.3), make(4, 4), make(4, 4)) {
                 (Ok(a), Ok(b), Ok(c)) => stages = Some((a, b, c)),
                 (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => {
-                    eprintln!("Latency measurement: {e}");
+                    log::warn!("Latency measurement: {e}");
                     return;
                 }
             }
@@ -391,7 +391,7 @@ fn run(shared: &Mutex<Shared>, plan_offset: (i32, i32), marks_offset: (i32, i32)
         frames += 1;
         if game != Some(game_now) || hud != Some(hud_now) {
             let ping = cues.read_views(std::slice::from_ref(&view), client).ping_score;
-            println!(
+            log::info!(
                 "Probe: {frames} frames, {:.0} ms after the key, game V1 {game_now} (Ping score {ping:.2}), HUD panel {hud_now} (mark pixels {:?})",
                 key.map_or(f64::NAN, |k| ms(k, t)),
                 &mark_px[..4]
@@ -408,8 +408,8 @@ fn run(shared: &Mutex<Shared>, plan_offset: (i32, i32), marks_offset: (i32, i32)
         {
             let what = if flip.open { "V1 open" } else { "V1 closed" };
             match flip.key {
-                Some(k) => println!("Marks {what}: key to game picture {:.0} ms, key to marks picture {:.0} ms; marks {:.0} ms behind the game", ms(k, flip.game), ms(k, t), ms(flip.game, t)),
-                None => println!("Marks {what} (no key): marks {:.0} ms behind the game", ms(flip.game, t)),
+                Some(k) => log::info!("Marks {what}: key to game picture {:.0} ms, key to marks picture {:.0} ms; marks {:.0} ms behind the game", ms(k, flip.game), ms(k, t), ms(flip.game, t)),
+                None => log::info!("Marks {what} (no key): marks {:.0} ms behind the game", ms(flip.game, t)),
             }
         }
         drawn = Some(drawn_now);
@@ -435,7 +435,7 @@ fn run(shared: &Mutex<Shared>, plan_offset: (i32, i32), marks_offset: (i32, i32)
                 ),
                 None => format!("{what} (no key): HUD picture {:.0} ms behind the game", ms(flip.game, t)),
             };
-            println!("{line}");
+            log::info!("{line}");
         }
         hud = Some(hud_now);
     }

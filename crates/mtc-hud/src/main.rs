@@ -5,6 +5,8 @@
 //! the angle readout box and the map-view cues every processed frame, the container of the map
 //! view on screen at that view's rate, and the loading UI region at its rate. Every 5 s it prints
 //! throughput, per-stage cost, capture-to-result latency and this process's CPU and memory use.
+// Release builds have no console window: the output goes to the log file.
+#![cfg_attr(feature = "gui", windows_subsystem = "windows")]
 
 mod diag;
 mod fire;
@@ -21,6 +23,7 @@ mod retry;
 mod seats;
 mod shots;
 mod stats;
+mod tray;
 mod ui_text;
 mod worker;
 
@@ -106,7 +109,7 @@ fn snapshot(path: &std::path::Path) {
             && let Ok(mut buffer) = frame.buffer()
             && buffer.save_as_image(path, ImageFormat::Png).is_ok()
         {
-            println!("Snapshot {}", path.display());
+            log::info!("Snapshot {}", path.display());
             return;
         }
     }
@@ -317,7 +320,7 @@ impl GraphicsCaptureApiHandler for Hud {
             (file, None)
         });
         let keys: Vec<u16> = INPUT_KEYS.iter().copied().chain(ctx.flags.follow_tune.then_some([VK_OEM_4, VK_OEM_6]).into_iter().flatten()).collect();
-        let input = mtc_input::Input::spawn(keys).map_err(|e| eprintln!("Input reading unavailable: {e}; shots are recorded from the screen only")).ok();
+        let input = mtc_input::Input::spawn(keys).map_err(|e| log::warn!("Input reading unavailable: {e}; shots are recorded from the screen only")).ok();
         let mut loading = loading::LoadingPipeline::new();
         if input.is_some() {
             loading.keys_live();
@@ -448,7 +451,7 @@ impl GraphicsCaptureApiHandler for Hud {
                     let next = (now + step).clamp(-60_000, 60_000);
                     mtc_overlay::FOLLOW_OFFSET_US.store(next, Relaxed);
                     // The automatic part is the overlay's (`[drag timing]` lines every 5 s while dragging).
-                    println!("Drag follow fine-tuning {:+.0} ms ([ earlier, ] later, 2 ms a step; the automatic part in [drag timing])", next as f64 / 1000.0);
+                    log::info!("Drag follow fine-tuning {:+.0} ms ([ earlier, ] later, 2 ms a step; the automatic part in [drag timing])", next as f64 / 1000.0);
                 }
                 if let mtc_input::InputEvent::Key { vk: VK_F, down: true, at } = event
                     && is_foreground(&self.flags.window)
@@ -514,7 +517,7 @@ impl GraphicsCaptureApiHandler for Hud {
             if let Some(shift) = picture_shift(&region_view(&self.shift_regions[0]), &region_view(&self.shift_regions[1]))
                 && shift != self.shift
             {
-                println!("The picture is ({}, {}) px up-left of the window geometry", shift.0, shift.1);
+                log::info!("The picture is ({}, {}) px up-left of the window geometry", shift.0, shift.1);
                 self.shift = shift;
             }
         }
@@ -531,7 +534,7 @@ impl GraphicsCaptureApiHandler for Hud {
             self.maps.set_placement(&placement);
             let l = self.aim_layout;
             let mapped = if placement.is_reference() { "the reference configuration" } else { "read mapped to the reference geometry, the HUD placed for it" };
-            println!("Display configuration: {}x{}, {}% ({mapped})", l.width, l.height, l.dpi * 100 / 96);
+            log::info!("Display configuration: {}x{}, {}% ({mapped})", l.width, l.height, l.dpi * 100 / 96);
         }
         let started = Instant::now();
         let cyc = self.stats.part(stats::Part::Top, handler_cycles.started());
@@ -620,10 +623,10 @@ impl GraphicsCaptureApiHandler for Hud {
                 }
             }
             let shown = shown.map_or(String::new(), |ms| format!(", the picture changed {ms:.0} ms after the key"));
-            println!("View {} -> {}: handled {processed:.0} ms after {key}{shown}", view_name(last), view_name(view));
+            log::info!("View {} -> {}: handled {processed:.0} ms after {key}{shown}", view_name(last), view_name(view));
         }
         if let Some((vk, _)) = self.view_key.filter(|&(_, at)| at.elapsed() >= VIEW_KEY_WINDOW) {
-            println!("No view change within {} ms of {} ({})", if vk == VK_M { "M" } else { "X" }, VIEW_KEY_WINDOW.as_millis(), view_name(view));
+            log::info!("No view change within {} ms of {} ({})", if vk == VK_M { "M" } else { "X" }, VIEW_KEY_WINDOW.as_millis(), view_name(view));
             self.view_key = None;
         }
         self.last_view = Some(view);
@@ -670,10 +673,10 @@ impl GraphicsCaptureApiHandler for Hud {
             }
             let elapsed = at.elapsed().as_secs_f64() * 1000.0;
             if marks_before && mini(view) {
-                println!("Loading menu marks: removed {elapsed:.0} ms after M");
+                log::info!("Loading menu marks: removed {elapsed:.0} ms after M");
             } else if self.loading.menu_cards(now_ms).is_some() {
                 let due = self.view_switch_due_ms(true) + VIEW_SWITCH_LEAD_MS;
-                println!("Loading menu marks: drawn {elapsed:.0} ms after M (the picture is back on V3 after about {due:.0} ms, as measured)");
+                log::info!("Loading menu marks: drawn {elapsed:.0} ms after M (the picture is back on V3 after about {due:.0} ms, as measured)");
             }
         }
         if left_v3 {
@@ -814,7 +817,7 @@ impl GraphicsCaptureApiHandler for Hud {
                     self.prefs.save();
                 }
                 PanelAction::Lock(locked) => {
-                    println!("Gunner panel: {}", if locked { "locked" } else { "unlocked" });
+                    log::info!("Gunner panel: {}", if locked { "locked" } else { "unlocked" });
                     self.prefs.panel_locked = locked;
                     self.prefs.save();
                 }
@@ -843,7 +846,7 @@ impl GraphicsCaptureApiHandler for Hud {
                         self.prefs.save();
                         self.diag.set_sharing(true);
                         self.consent_open = false;
-                        println!("Statistics: the player agreed to send them");
+                        log::info!("Statistics: the player agreed to send them");
                     }
                     mtc_overlay::ConsentChoice::NotNow => {
                         if self.consent_dont_ask {
@@ -851,7 +854,7 @@ impl GraphicsCaptureApiHandler for Hud {
                             self.prefs.save();
                         }
                         self.consent_open = false;
-                        println!("Statistics: the player chose not now{}", if self.consent_dont_ask { ", don't ask again" } else { "" });
+                        log::info!("Statistics: the player chose not now{}", if self.consent_dont_ask { ", don't ask again" } else { "" });
                     }
                 },
                 PanelAction::Set(setting) => {
@@ -863,7 +866,7 @@ impl GraphicsCaptureApiHandler for Hud {
                     if let mtc_overlay::Setting::Step(mtc_overlay::Stepper::DragOffset, _) = setting {
                         mtc_overlay::FOLLOW_OFFSET_US.store(i64::from(self.prefs.drag_offset_ms) * 1000, Ordering::Relaxed);
                     }
-                    println!("Setting: {setting:?}");
+                    log::info!("Setting: {setting:?}");
                 }
                 PanelAction::Moved((x, y)) => {
                     if let Some(((dx, dy), scale)) = self.panel_default.get() {
@@ -910,7 +913,7 @@ impl GraphicsCaptureApiHandler for Hud {
             self.last_snapshot = Some(Instant::now());
             self.snapshots_taken += 1;
             if self.snapshots_taken == SNAPSHOT_MAX {
-                println!("{SNAPSHOT_MAX} snapshots taken, no more");
+                log::info!("{SNAPSHOT_MAX} snapshots taken, no more");
             }
             let path = dir.join(format!("{:07}.png", now_ms));
             std::thread::spawn(move || snapshot(&path));
@@ -925,12 +928,12 @@ impl GraphicsCaptureApiHandler for Hud {
                 let text = (r.elevation_text.clone(), r.azimuth_text.clone());
                 if self.last_text.as_ref() != Some(&text) {
                     let landing = self.fire.prediction().map(|p| format!("  -> lands {:.0} m out, {:.1} s", p.distance_m, p.time_s)).unwrap_or_default();
-                    println!("elevation {:>7}°  azimuth {}°{landing}   (cost {}, area {}x{}) @{now_ms}", r.elevation_text, r.azimuth_text, r.cost, w, h);
+                    log::info!("elevation {:>7}°  azimuth {}°{landing}   (cost {}, area {}x{}) @{now_ms}", r.elevation_text, r.azimuth_text, r.cost, w, h);
                     self.last_text = Some(text);
                 }
             }
             AimResult::Absent if self.last_text.is_some() => {
-                println!("(angle readout not on screen)");
+                log::info!("(angle readout not on screen)");
                 self.last_text = None;
             }
             _ => {}
@@ -949,13 +952,13 @@ impl GraphicsCaptureApiHandler for Hud {
             let laps = self.maps.take_laps();
             if !laps.is_empty() {
                 let parts: Vec<String> = laps.iter().map(|(view, step, ms, n)| format!("{view} {step} {:.3} ({:.1}/s × {:.1} ms)", ms / 1000.0 / seconds, f64::from(*n) / seconds, ms / f64::from(*n))).collect();
-                println!("[map parts] {}", parts.join(" · "));
+                log::info!("[map parts] {}", parts.join(" · "));
             }
             // What the working set holds beyond the private bytes and the heap: the height layers'
             // mapped pages read, and the readback's staging textures (driver memory).
             let heights: Vec<String> = self.fire.height_layers(|b| format!("{:.1}/{:.0}", stats::resident_mb(b), b.len() as f64 / 1e6));
             let (textures, staging) = self.readback.staging_bytes();
-            println!(
+            log::info!(
                 "[memory parts] heap {:.1} MB · heightmap resident/mapped {} MB · readback staging textures {textures}, {:.1} MB · identification thumbnails {}",
                 stats::heap_mb(),
                 if heights.is_empty() { "-".to_owned() } else { heights.join(" + ") },
@@ -1113,7 +1116,7 @@ impl Hud {
                 image.save_png(&dir.join(format!("{name}.png"))).map_err(|e| e.to_string())?;
             }
         }
-        println!("Problem report: {}", short_path(&dir));
+        log::info!("Problem report: {}", short_path(&dir));
         Ok(dir)
     }
 
@@ -1228,7 +1231,7 @@ impl Hud {
             let label = marks.marks.iter().filter(hit).min_by(|a, b| (a.x - x).hypot(a.y - y).total_cmp(&(b.x - x).hypot(b.y - y))).map(|m| m.label.clone());
             let label = label.or_else(|| self.objective_at(placement, self.screen_offset, (x, y)));
             if let Some(label) = label {
-                println!("Selected target {label} (V1 click)");
+                log::info!("Selected target {label} (V1 click)");
                 self.fire.select(&label);
             }
         }
@@ -1742,6 +1745,7 @@ fn composite(image: &mut mtc_dataset::image::RgbImage, layers: &[mtc_overlay::La
 /// prints every frame's readout. Off the reference the readout and the loading UI are read too,
 /// the loading UI with templates drawn for the configuration.
 fn replay(id: &str) {
+    logfile::console_only();
     let render_dir = arg_value("--render-marks").map(std::path::PathBuf::from);
     // How often the map marks are rendered (ms of recording; 0: every frame).
     let render_every: u64 = arg_value("--render-every").map_or(2000, |v| v.parse().expect("--render-every <ms>"));
@@ -1796,7 +1800,7 @@ fn replay(id: &str) {
             memory_at = Some(meta.t_ms);
             let (ws, private) = stats::memory_mb();
             let heights = fire.height_layers(stats::resident_mb).iter().fold(0.0, |a, b| a + b);
-            println!(
+            log::info!(
                 "[memory] {:.0} s: working set {ws:.0} MB · private {private:.0} MB · heap {:.1} MB · heightmap resident {heights:.1} MB · identification thumbnails {}",
                 meta.t_ms as f64 / 1000.0,
                 stats::heap_mb(),
@@ -1853,7 +1857,7 @@ fn replay(id: &str) {
         let map_origin = placement.bottom_origin();
         if let Some((map_view, rect)) = pipeline.wanted(&c, map_origin, meta.t_ms) {
             let cursor = meta.cursor.map(|(x, y)| placement.frame_to_map(map_view, (f64::from(x) + 0.5, f64::from(y) + 0.5)));
-            println!("-- {:.1}s", meta.t_ms as f64 / 1000.0);
+            log::info!("-- {:.1}s", meta.t_ms as f64 / 1000.0);
             if placement.is_reference() {
                 pipeline.process(&view, map_view, &c, origin, cursor, maps::MapInput::default(), meta.t_ms);
             } else {
@@ -1884,7 +1888,7 @@ fn replay(id: &str) {
                 AimResult::Unreadable { .. } => "unreadable".to_owned(),
                 AimResult::Absent => "none".to_owned(),
             };
-            println!("Readout frame {} {}% {}x{} {shown}", meta.file, key.0 * 100 / 96, key.1, key.2);
+            log::info!("Readout frame {} {}% {}x{} {shown}", meta.file, key.0 * 100 / 96, key.1, key.2);
         }
         if let AimResult::Read(r) = &result {
             count.0 += 1;
@@ -1938,7 +1942,7 @@ fn replay(id: &str) {
                     .collect();
                 let line = kinds.join(" · ");
                 if !line.is_empty() && last_kinds.as_ref() != Some(&line) {
-                    println!("Charge marks' shells: {line}");
+                    log::info!("Charge marks' shells: {line}");
                     last_kinds = Some(line);
                 }
             }
@@ -1969,7 +1973,7 @@ fn replay(id: &str) {
         if let (AimResult::Read(r), Some(p)) = (&result, fire.prediction()) {
             let text = format!("elevation {:>7}°  azimuth {}°  -> lands {:.0} m out, {:.1} s", r.elevation_text, r.azimuth_text, p.distance_m, p.time_s);
             if last_prediction.as_ref() != Some(&text) {
-                println!("{text}");
+                log::info!("{text}");
                 last_prediction = Some(text);
             }
         }
@@ -2009,11 +2013,11 @@ fn replay(id: &str) {
         }
     }
     shot_log.flush(&fire);
-    println!("Replay done: {processed} map views processed, {:.1} ms on average", work.as_secs_f64() * 1000.0 / f64::from(processed.max(1)));
+    log::info!("Replay done: {processed} map views processed, {:.1} ms on average", work.as_secs_f64() * 1000.0 / f64::from(processed.max(1)));
     let per_read = |d: Duration| d.as_secs_f64() * 1000.0 / f64::from(loading_reads.max(1));
-    println!("Loading UI: read {loading_reads} times, {:.2} ms on average (of which {:.2} ms mapping another configuration to the reference geometry)", per_read(loading_work), per_read(loading_remap));
+    log::info!("Loading UI: read {loading_reads} times, {:.2} ms on average (of which {:.2} ms mapping another configuration to the reference geometry)", per_read(loading_work), per_read(loading_remap));
     let counts: Vec<String> = aim_counts.iter().map(|((dpi, w, h), (read, n))| format!("{}% {w}×{h} {read}/{n}", dpi * 100 / 96)).collect();
-    println!("Angle readout (by display configuration): {}", counts.join(" · "));
+    log::info!("Angle readout (by display configuration): {}", counts.join(" · "));
 }
 
 fn main() {
@@ -2025,20 +2029,26 @@ fn main() {
     stats::name_this_thread("main");
     // The log also goes to a file per run, set up before anything is printed.
     diag::count_panics();
-    if let Some(log) = logfile::start(Instant::now()) {
-        println!("Log file: {}", log.path().display());
+    // Development builds print the messages as well; the release build has no console.
+    if let Some(log) = logfile::start(Instant::now(), !cfg!(feature = "gui")) {
+        log::info!("Log file: {}", log.path().display());
+    }
+    if already_running() {
+        log::info!("Another copy is already running; this one ends");
+        return;
     }
     let stop = Arc::new(AtomicBool::new(false));
     {
         let stop = stop.clone();
         ctrlc::set_handler(move || stop.store(true, Ordering::SeqCst)).expect("Ctrl+C handler");
     }
+    let tray = tray::spawn(stop.clone());
     let manual = parse_manual();
     let mirror = std::env::args().any(|a| a == "--mirror");
     let follow_tune = std::env::args().any(|a| a == "--follow-tune");
     if std::env::args().any(|a| a == "--hidden") {
         mtc_overlay::HIDDEN.store(true, std::sync::atomic::Ordering::Relaxed);
-        println!("Hidden mode: no windows, recognition and logging only");
+        log::info!("Hidden mode: no windows, recognition and logging only");
     }
     // The drag follow's fine-tuning from the settings; `--follow-offset <ms>` (development) to start
     // from another (positive: later), not saved.
@@ -2046,7 +2056,7 @@ fn main() {
     let offset_ms = arg_value("--follow-offset").and_then(|v| v.parse::<f64>().ok()).unwrap_or(f64::from(prefs.drag_offset_ms));
     mtc_overlay::FOLLOW_OFFSET_US.store((offset_ms * 1000.0) as i64, std::sync::atomic::Ordering::Relaxed);
     if follow_tune {
-        println!("Drag follow tuning: while dragging the full map press [ to move the marks {} ms earlier, ] {} ms later, until they look stuck to it", FOLLOW_TUNE_STEP_US / 1000, FOLLOW_TUNE_STEP_US / 1000);
+        log::info!("Drag follow tuning: while dragging the full map press [ to move the marks {} ms earlier, ] {} ms later, until they look stuck to it", FOLLOW_TUNE_STEP_US / 1000, FOLLOW_TUNE_STEP_US / 1000);
     }
     let snapshots = arg_value("--snapshots").map(std::path::PathBuf::from);
     let v1_log = arg_value("--v1-log").map(std::path::PathBuf::from);
@@ -2070,23 +2080,28 @@ fn main() {
         let front = foreground_handle();
         front != 0 && front == gate_handle.load(Ordering::Relaxed)
     }));
-    println!("MTC HUD (angles, maps, gun and targets, loading, firing solutions) · Ctrl+C ends");
+    log::info!("MTC Calculator {} · quit from the notification area icon (Ctrl+C in a console)", env!("CARGO_PKG_VERSION"));
     if let Some((e, a)) = manual {
-        println!("Manual target (used with no firing solution): elevation {e:+.2}°  azimuth {a:06.2}°");
+        log::info!("Manual target (used with no firing solution): elevation {e:+.2}°  azimuth {a:06.2}°");
     }
     match prefs.tolerance_mode {
-        mtc_overlay::ToleranceMode::Angle => println!("Aim tolerance (settings): elevation ±{:.2}°, azimuth ±{:.2}°", prefs.tolerance_angle.0, prefs.tolerance_angle.1),
-        mtc_overlay::ToleranceMode::Impact => println!("Aim tolerance (settings): impact along the line of fire ±{:.0} m, across ±{:.0} m", prefs.tolerance_impact.0, prefs.tolerance_impact.1),
+        mtc_overlay::ToleranceMode::Angle => log::info!("Aim tolerance (settings): elevation ±{:.2}°, azimuth ±{:.2}°", prefs.tolerance_angle.0, prefs.tolerance_angle.1),
+        mtc_overlay::ToleranceMode::Impact => log::info!("Aim tolerance (settings): impact along the line of fire ±{:.0} m, across ±{:.0} m", prefs.tolerance_impact.0, prefs.tolerance_impact.1),
     }
     if mirror {
-        println!("Mirror mode: the aim strip shows the same text as the game's readout");
+        log::info!("Mirror mode: the aim strip shows the same text as the game's readout");
     }
+    let mut waiting_said = false;
     while !stop.load(Ordering::SeqCst) {
         let Some(window) = find_roblox() else {
-            println!("Waiting for the Roblox window...");
+            if !waiting_said {
+                log::info!("Waiting for the Roblox window...");
+                waiting_said = true;
+            }
             std::thread::sleep(Duration::from_secs(2));
             continue;
         };
+        waiting_said = false;
         roblox_handle.store(window.as_raw_hwnd() as isize, Ordering::Relaxed);
         let settings = Settings::new(
             window,
@@ -2117,11 +2132,34 @@ fn main() {
                 let _ = capture.stop();
             }
             Err(error) => {
-                eprintln!("Capture failed to start: {error}");
+                log::warn!("Capture failed to start: {error}");
                 std::thread::sleep(Duration::from_secs(2));
             }
         }
     }
+    tray.remove();
+}
+
+/// Whether another copy of the calculator is running (two would draw over each other); that one
+/// is pointed to.
+fn already_running() -> bool {
+    use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError};
+    use windows::Win32::System::Threading::CreateMutexW;
+    use windows::Win32::UI::WindowsAndMessaging::{MB_ICONINFORMATION, MB_OK, MessageBoxW};
+    // Held until the process ends.
+    let Ok(_mutex) = (unsafe { CreateMutexW(None, true, windows::core::w!(r"Local\MTCCalculator")) }) else { return false };
+    if unsafe { GetLastError() } != ERROR_ALREADY_EXISTS {
+        return false;
+    }
+    unsafe {
+        MessageBoxW(
+            None,
+            windows::core::w!("MTC Calculator is already running. Its icon is in the notification area at the bottom right of the screen."),
+            windows::core::w!("MTC Calculator"),
+            MB_OK | MB_ICONINFORMATION,
+        )
+    };
+    true
 }
 
 #[cfg(test)]

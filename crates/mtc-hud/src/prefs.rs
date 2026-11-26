@@ -126,7 +126,7 @@ impl Prefs {
             .map_or(Ok(()), std::fs::create_dir_all)
             .and_then(|()| std::fs::write(&path, serde_json::to_string_pretty(self).expect("prefs to json")));
         if let Err(e) = written {
-            eprintln!("Settings could not be written to {}: {e}", path.display());
+            log::warn!("Settings could not be written to {}: {e}", path.display());
         }
     }
 

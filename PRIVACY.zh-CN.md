@@ -12,7 +12,7 @@
 
 ## 日志
 
-每次运行会在 `%LOCALAPPDATA%\MTC Calculator\logs` 写一份日志：认出了什么、各步花了多久。只保留最新的 10 份，最多 50 MB、30 天，更早的自动删除。在设置的“Log files”里点“Open folder”可以打开这个文件夹。
+每次运行会在 `%LOCALAPPDATA%\MTC Calculator\logs` 写一份日志：认出了什么、各步花了多久。只保留最新的 10 份，最多 50 MB、30 天，更早的自动删除。在设置的“Log files”里点“Open folder”，或者在右下角通知区图标的菜单里，都可以打开这个文件夹。
 
 ## 下载
 

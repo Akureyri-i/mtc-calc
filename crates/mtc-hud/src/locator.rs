@@ -90,7 +90,7 @@ impl Locator {
             }
             let Some(agreed) = agreed(seen) else { continue };
             let rule = self.layout.map_container(*view);
-            println!(
+            log::info!(
                 "Located: {name} on screen at ({:.1}, {:.1}), side {:.1}; the rule gives ({:.1}, {:.1}), {:.1}; off by ({:+.1}, {:+.1}), {:+.1} px",
                 agreed.0, agreed.1, agreed.2, rule.0, rule.1, rule.2, agreed.0 - rule.0, agreed.1 - rule.1, agreed.2 - rule.2
             );

@@ -20,8 +20,8 @@ about you leaves your PC unless you turn on statistics, or send a problem report
 ## Logs
 
 Every run writes a log to `%LOCALAPPDATA%\MTC Calculator\logs`: what it recognised and how long
-things took. The newest 10 logs are kept, at most 50 MB and 30 days; older ones are deleted. Open
-the folder from Settings, *Log files*, *Open folder*.
+things took. The newest 10 logs are kept, at most 50 MB and 30 days; older ones are deleted. Open the folder from Settings, *Log files*, *Open folder*, or from the menu of the calculator's icon in the
+notification area.
 
 ## Downloads
 

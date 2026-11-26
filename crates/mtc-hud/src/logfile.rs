@@ -1,21 +1,16 @@
-//! The HUD's log kept as files, for debugging: everything printed to
-//! stdout and stderr also goes, with the seconds since start, to a file per run in
-//! `%LOCALAPPDATA%\MTC Calculator\logs` (`MTC_LOG_DIR` when set), and the last minutes stay in
-//! memory for a problem report (`recent`). The console (or a redirect) still gets the output as
-//! before. Old files are removed at start: at most `KEEP_FILES`, `KEEP_BYTES` in all, none older
-//! than `KEEP_DAYS`.
+//! The HUD's log. Every message (the `log` macros) goes, with the seconds since start, to a file
+//! per run in `%LOCALAPPDATA%\MTC Calculator\logs` (`MTC_LOG_DIR` when set), and the last minutes
+//! stay in memory for a problem report (`recent`). Development builds, which have a console, print
+//! the messages there too (warnings on standard error); replays only print them. Old files are
+//! removed at start: at most `KEEP_FILES`, `KEEP_BYTES` in all, none older than `KEEP_DAYS`.
 use std::collections::VecDeque;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Write};
-use std::mem::ManuallyDrop;
-use std::os::windows::io::{FromRawHandle, RawHandle};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 
-use windows::Win32::Foundation::HANDLE;
-use windows::Win32::System::Console::{GetStdHandle, STD_ERROR_HANDLE, STD_HANDLE, STD_OUTPUT_HANDLE, SetStdHandle};
-use windows::Win32::System::Pipes::CreatePipe;
+use log::{Level, LevelFilter, Log, Metadata, Record};
 
 const KEEP_FILES: usize = 10;
 const KEEP_BYTES: u64 = 50 << 20;
@@ -26,7 +21,6 @@ const RECENT_MAX_BYTES: usize = 4 << 20;
 
 pub struct LogFile {
     path: PathBuf,
-    started: Instant,
     recent: Mutex<VecDeque<(Instant, String)>>,
     recent_bytes: Mutex<usize>,
 }
@@ -41,27 +35,83 @@ pub fn dir() -> Option<PathBuf> {
     Some(PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("MTC Calculator").join("logs"))
 }
 
-/// Starts writing the log files (once); `None` where the folder or the pipes cannot be made.
-pub fn start(started: Instant) -> Option<Arc<LogFile>> {
+/// Starts the log (once): the file, and the messages printed as well when `console`. `None` where
+/// the file cannot be made (the messages are then only printed, when `console`).
+pub fn start(started: Instant, console: bool) -> Option<Arc<LogFile>> {
     if let Some(log) = LOG.get() {
         return Some(log.clone());
     }
-    let dir = dir()?;
-    std::fs::create_dir_all(&dir).ok()?;
-    clean(&dir);
-    let stamp = day_time_stamp();
-    let path = dir.join(format!("hud-{stamp}.log"));
-    let file = Arc::new(Mutex::new(File::create(&path).ok()?));
-    let log = Arc::new(LogFile { path, started, recent: Mutex::new(VecDeque::new()), recent_bytes: Mutex::new(0) });
-    tee(STD_OUTPUT_HANDLE, "", file.clone(), log.clone())?;
-    tee(STD_ERROR_HANDLE, "[stderr] ", file, log.clone())?;
-    LOG.set(log.clone()).ok();
-    Some(log)
+    let opened = dir().and_then(|dir| {
+        std::fs::create_dir_all(&dir).ok()?;
+        clean(&dir);
+        let path = dir.join(format!("hud-{}.log", day_time_stamp()));
+        let file = File::create(&path).ok()?;
+        Some((Arc::new(LogFile { path, recent: Mutex::new(VecDeque::new()), recent_bytes: Mutex::new(0) }), Mutex::new(file)))
+    });
+    let log = opened.as_ref().map(|(log, _)| log.clone());
+    install(Logger { file: opened, started, console });
+    if let Some(log) = &log {
+        LOG.set(log.clone()).ok();
+    }
+    log
+}
+
+/// The messages printed only (replays and tools).
+pub fn console_only() {
+    install(Logger { file: None, started: Instant::now(), console: true });
+}
+
+fn install(logger: Logger) {
+    if log::set_boxed_logger(Box::new(logger)).is_ok() {
+        log::set_max_level(LevelFilter::Info);
+    }
 }
 
 /// The log, when it was started.
 pub fn get() -> Option<Arc<LogFile>> {
     LOG.get().cloned()
+}
+
+struct Logger {
+    file: Option<(Arc<LogFile>, Mutex<File>)>,
+    started: Instant,
+    console: bool,
+}
+
+impl Log for Logger {
+    fn enabled(&self, metadata: &Metadata) -> bool {
+        // The calculator's own messages; of the libraries it uses (network, TLS), warnings only.
+        metadata.level() <= if metadata.target().starts_with("mtc_") { Level::Info } else { Level::Warn }
+    }
+
+    fn log(&self, record: &Record) {
+        if !self.enabled(record.metadata()) {
+            return;
+        }
+        let text = record.args().to_string();
+        if self.console {
+            if record.level() <= Level::Warn {
+                eprintln!("{text}");
+            } else {
+                println!("{text}");
+            }
+        }
+        let Some((log, file)) = &self.file else { return };
+        let mark = match record.level() {
+            Level::Error => "[error] ",
+            Level::Warn => "[warning] ",
+            _ => "",
+        };
+        let secs = self.started.elapsed().as_secs_f64();
+        let Ok(mut file) = file.lock() else { return };
+        for line in text.split('\n') {
+            let stamped = format!("[{secs:8.1}] {mark}{}", line.trim_end_matches('\r'));
+            let _ = writeln!(file, "{stamped}");
+            log.keep(stamped);
+        }
+    }
+
+    fn flush(&self) {}
 }
 
 impl LogFile {
@@ -90,42 +140,6 @@ impl LogFile {
             recent.pop_front();
         }
     }
-}
-
-/// The standard handle `which` redirected into a pipe whose lines a thread copies to where the
-/// handle went before, to the file (with the seconds since start) and to the recent lines.
-fn tee(which: STD_HANDLE, mark: &'static str, file: Arc<Mutex<File>>, log: Arc<LogFile>) -> Option<()> {
-    let before = unsafe { GetStdHandle(which) }.ok().filter(|h| !h.is_invalid() && !h.0.is_null());
-    let (mut read, mut write) = (HANDLE::default(), HANDLE::default());
-    unsafe { CreatePipe(&mut read, &mut write, None, 0) }.ok()?;
-    unsafe { SetStdHandle(which, write) }.ok()?;
-    let read = unsafe { File::from_raw_handle(read.0 as RawHandle) };
-    // Where the output went before (a console or a redirect), never closed here.
-    let before = before.map(|h| ManuallyDrop::new(unsafe { File::from_raw_handle(h.0 as RawHandle) }));
-    std::thread::Builder::new()
-        .name(format!("log{}", if mark.is_empty() { "" } else { "-err" }))
-        .spawn(move || {
-            let mut before = before;
-            let mut lines = BufReader::new(read);
-            let mut line = String::new();
-            loop {
-                line.clear();
-                match lines.read_line(&mut line) {
-                    Ok(0) | Err(_) => break,
-                    Ok(_) => {}
-                }
-                if let Some(out) = before.as_mut() {
-                    let _ = out.write_all(line.as_bytes());
-                }
-                let stamped = format!("[{:8.1}] {mark}{}", log.started.elapsed().as_secs_f64(), line.trim_end_matches(['\r', '\n']));
-                if let Ok(mut f) = file.lock() {
-                    let _ = writeln!(f, "{stamped}");
-                }
-                log.keep(stamped);
-            }
-        })
-        .ok()?;
-    Some(())
 }
 
 /// Removes old log files: beyond the newest `KEEP_FILES`, beyond `KEEP_BYTES` in all, older than

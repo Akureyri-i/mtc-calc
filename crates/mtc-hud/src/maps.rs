@@ -403,7 +403,7 @@ fn register_job(current: &mut Option<(&'static MapInfo, u32, V1Registrar)>, job:
                 (V1Registrar::new(&MapReference::from_rgba(&job.map.id, size, img.width, img.height, &img.data), cell), "downloaded reference")
             }
         };
-        println!("V1 registration ready ({which}, {} ms)", started.elapsed().as_millis());
+        log::info!("V1 registration ready ({which}, {} ms)", started.elapsed().as_millis());
         *current = Some((job.map, job.generation, r));
     }
     let (_, _, registrar) = current.as_mut().expect("registrar");
@@ -494,7 +494,7 @@ fn load_library(slot: &Mutex<Option<Library>>, pace: bool) -> Vec<&'static MapIn
     let mut identifier = MapIdentifier::new(&[]);
     let missing = mtc_maps::all().iter().filter(|m| !mtc_maps::reference_path(m).is_file()).count();
     if missing > 0 {
-        println!("Map pictures: {missing} missing from the cache, downloading from the map service");
+        log::info!("Map pictures: {missing} missing from the cache, downloading from the map service");
     }
     let mut fetched = 0;
     let mut to_make: Vec<(usize, &'static MapInfo, u64)> = Vec::new();
@@ -503,15 +503,15 @@ fn load_library(slot: &Mutex<Option<Library>>, pace: bool) -> Vec<&'static MapIn
         match mtc_maps::ensure_reference(info) {
             Ok(true) => {
                 fetched += 1;
-                println!("  downloaded {} ({fetched}/{missing})", info.id);
+                log::info!("  downloaded {} ({fetched}/{missing})", info.id);
             }
             Ok(false) => {}
-            Err(e) => eprintln!("  {} could not be downloaded: {e}", info.id),
+            Err(e) => log::warn!("  {} could not be downloaded: {e}", info.id),
         }
         let key = match std::fs::read(mtc_maps::reference_path(info)) {
             Ok(bytes) => mtc_maps::content_hash(&bytes),
             Err(e) => {
-                eprintln!("Map picture missing {}: {e}", info.id);
+                log::warn!("Map picture missing {}: {e}", info.id);
                 absent.push(info);
                 continue;
             }
@@ -527,7 +527,7 @@ fn load_library(slot: &Mutex<Option<Library>>, pace: bool) -> Vec<&'static MapIn
     }
     let count = maps.len();
     *slot.lock().expect("library lock") = Some(Library { maps, identifier, keys, thumbnails_dropped: false, thumbnail_reloads: 0 });
-    println!("Map library ready: {count} maps ({} thumbnails from the cache, {:.2} s)", count - to_make.len(), started.elapsed().as_secs_f64());
+    log::info!("Map library ready: {count} maps ({} thumbnails from the cache, {:.2} s)", count - to_make.len(), started.elapsed().as_secs_f64());
     if to_make.is_empty() {
         return absent;
     }
@@ -537,12 +537,12 @@ fn load_library(slot: &Mutex<Option<Library>>, pace: bool) -> Vec<&'static MapIn
         let thumbnail = match mtc_maps::load_reference(info) {
             Ok(img) => Thumbnail::of(&MapReference::from_rgba(&info.id, info.size_m(), img.width, img.height, &img.data)),
             Err(e) => {
-                eprintln!("Map picture unreadable {}: {e}", info.id);
+                log::warn!("Map picture unreadable {}: {e}", info.id);
                 continue;
             }
         };
         if let Err(e) = std::fs::write(mtc_maps::thumbnail_path(info), thumbnail.to_bytes(*key)) {
-            eprintln!("Thumbnail could not be saved {}: {e}", info.id);
+            log::warn!("Thumbnail could not be saved {}: {e}", info.id);
         }
         if let Some(library) = slot.lock().expect("library lock").as_mut() {
             library.identifier.set_thumbnail(*index, thumbnail);
@@ -551,7 +551,7 @@ fn load_library(slot: &Mutex<Option<Library>>, pace: bool) -> Vec<&'static MapIn
             std::thread::sleep(t.elapsed().mul_f64(PACE_REST));
         }
     }
-    println!("Made {} missing thumbnails ({:.1} s), saved to the cache", to_make.len(), making.elapsed().as_secs_f64());
+    log::info!("Made {} missing thumbnails ({:.1} s), saved to the cache", to_make.len(), making.elapsed().as_secs_f64());
     absent
 }
 
@@ -570,10 +570,10 @@ fn retry_until_in<T: Copy>(mut absent: Vec<T>, delay: impl Fn(usize) -> Duration
         attempt += 1;
         let arrived = absent.iter().filter(|&&item| fetch(item)).count();
         if arrived > 0 {
-            println!("Map pictures: retry {attempt} downloaded {arrived}, rebuilding the map library");
+            log::info!("Map pictures: retry {attempt} downloaded {arrived}, rebuilding the map library");
             absent = rebuild();
         } else {
-            println!("Map pictures: retry {attempt}, {} still not downloaded, next try in {} s", absent.len(), delay(attempt).as_secs());
+            log::info!("Map pictures: retry {attempt}, {} still not downloaded, next try in {} s", absent.len(), delay(attempt).as_secs());
         }
     }
 }
@@ -747,7 +747,7 @@ impl MapPipeline {
         self.set_current(info);
         self.forced = true;
         self.no_reference = mtc_maps::by_id(&info.id).is_none();
-        println!("Map: {} (given on the command line{})", info.name, if self.no_reference { "; no reference picture: the full map is tracked from the input and must be at 1x when the HUD opens" } else { "" });
+        log::info!("Map: {} (given on the command line{})", info.name, if self.no_reference { "; no reference picture: the full map is tracked from the input and must be at 1x when the HUD opens" } else { "" });
     }
 
     /// The V1 canvas (for the model log).
@@ -830,7 +830,7 @@ impl MapPipeline {
         if weak && (measured.zoom - now.zoom).abs() > 1e-6 {
             let confirmed = self.pending_zoom.is_some_and(|p| (p.zoom - measured.zoom).abs() < 1e-6 && difference_px(&p, measured) <= CANVAS_TOLERANCE_PX);
             if !confirmed {
-                println!("V1 registration {:.1}x disagrees with the canvas {:.1}x: this frame is skipped until the next registration confirms", measured.zoom, now.zoom);
+                log::info!("V1 registration {:.1}x disagrees with the canvas {:.1}x: this frame is skipped until the next registration confirms", measured.zoom, now.zoom);
                 self.pending_zoom = Some(*measured);
                 self.canvas_stats.held += 1;
                 return;
@@ -877,7 +877,7 @@ impl MapPipeline {
         if s.corrections > 0 {
             line += &format!(" (max {:.0} px)", s.largest_correction);
         }
-        println!("{line}");
+        log::info!("{line}");
     }
 
     /// The latest arrow sighting: the arrow, its view, the view's zoom and when.
@@ -980,7 +980,7 @@ impl MapPipeline {
             let max = drag.trail_px.iter().fold(0.0f64, |a, &b| a.max(b));
             format!(" ({} frames, the diamond on screen behind the cursor by median {:.0} px, max {max:.0} px)", drag.trail_px.len(), median(&mut drag.trail_px))
         };
-        println!("Target {} moved{trail}", drag.label);
+        log::info!("Target {} moved{trail}", drag.label);
     }
 
     pub fn marker_dragging(&self) -> bool {
@@ -1123,7 +1123,7 @@ impl MapPipeline {
                 self.opening += 1;
             }
             if reopened && let Some(t) = self.canvas.transform().filter(|t| t.zoom > 1.0 + 1e-6 || t.origin != (0.0, 0.0)) {
-                println!("V1 reopened: canvas reset from {:.1}x to 1.0x", t.zoom);
+                log::info!("V1 reopened: canvas reset from {:.1}x to 1.0x", t.zoom);
                 self.canvas.correct(MapTransform { zoom: 1.0, origin: (0.0, 0.0), ..t }, Instant::now());
                 self.pending_zoom = None;
             }
@@ -1324,7 +1324,7 @@ impl MapPipeline {
         }
         if started.elapsed() > std::time::Duration::from_millis(30) {
             let parts: Vec<String> = laps.iter().map(|(n, ms)| format!("{n} {ms:.1}")).collect();
-            println!("Slow map step ({}, {:.0} ms): {}", view_name(view), started.elapsed().as_secs_f64() * 1000.0, parts.join(" · "));
+            log::info!("Slow map step ({}, {:.0} ms): {}", view_name(view), started.elapsed().as_secs_f64() * 1000.0, parts.join(" · "));
         }
         let gun_moved = match (self.gun, self.reported_gun) {
             (Some((g, _, _)), Some(r)) => dist_m(g.map, r, info) > GUN_REPORT_M,
@@ -1333,14 +1333,14 @@ impl MapPipeline {
         };
         for e in &events {
             match e {
-                TargetEvent::Added(l) => println!("Target +{l}"),
-                TargetEvent::Removed(l) => println!("Target -{l}"),
+                TargetEvent::Added(l) => log::info!("Target +{l}"),
+                TargetEvent::Removed(l) => log::info!("Target -{l}"),
                 TargetEvent::Moved(l) => match &mut self.marker_drag {
                     Some(drag) if &drag.label == l => drag.moved = true,
-                    _ => println!("Target {l} moved"),
+                    _ => log::info!("Target {l} moved"),
                 },
-                TargetEvent::Cleared => println!("Targets all cleared"),
-                TargetEvent::Series(letter) => println!("Own markers are the {letter} series (seen when placing one); markers taken as own before are dropped"),
+                TargetEvent::Cleared => log::info!("Targets all cleared"),
+                TargetEvent::Series(letter) => log::info!("Own markers are the {letter} series (seen when placing one); markers taken as own before are dropped"),
             }
         }
         // A dragged marker moves every read: the position line waits for other news.
@@ -1393,7 +1393,7 @@ impl MapPipeline {
         }
         if let Some(r) = result.registration {
             if self.full_transform.is_none_or(|t| (t.zoom - r.transform.zoom).abs() > 1e-6) {
-                println!("V1 zoom {:.1}x ({:?})", r.transform.zoom, r.method);
+                log::info!("V1 zoom {:.1}x ({:?})", r.transform.zoom, r.method);
             }
             self.last_method = Some(r.method);
             self.last_score = r.score;
@@ -1411,7 +1411,7 @@ impl MapPipeline {
             let (dx, dy) = ((impact.map.0 - g.map.0) * w, (impact.map.1 - g.map.1) * w);
             format!(", {:.1} m from the gun at azimuth {:.2}°", dx.hypot(dy), (dx.atan2(-dy).to_degrees() + 360.0) % 360.0)
         });
-        println!(
+        log::info!(
             "Impact #{} ({}){note}: x {:.1} m  y {:.1} m{}; strength {:.2}, landed about {:.1} s ago",
             impact.id,
             view_name(view),
@@ -1425,12 +1425,12 @@ impl MapPipeline {
 
     fn report(&mut self, info: &MapInfo) {
         let Some((gun, view, _)) = self.gun else {
-            println!(" (player arrow not found)");
+            log::info!(" (player arrow not found)");
             return;
         };
         self.reported_gun = Some(gun.map);
         let w = info.size_m();
-        println!(
+        log::info!(
             "Gun ({} arrow{}): x {:.1} m  y {:.1} m",
             view_name(view),
             if gun.mounted { "" } else { ", not in a vehicle" },
@@ -1475,7 +1475,7 @@ impl MapPipeline {
         if self.current.as_ref().is_some_and(|c| c.info.id == info.id) {
             return;
         }
-        println!(
+        log::info!(
             "Map: {} ({} {}, score {:.2}, lead {:.2})",
             info.name,
             view_name(view),
@@ -1494,13 +1494,13 @@ impl MapPipeline {
         let whole = self.canvas.transform().is_some_and(|c| (c.zoom - 1.0).abs() < 1e-6 && c.origin == (0.0, 0.0));
         let Some(g) = self.game_ref.as_mut().filter(|_| whole && score >= UNZOOMED_HINT) else { return };
         if g.check(self.opening, score) {
-            println!("In-game reference ({}): several full-map openings did not match, collecting again", info.name);
+            log::info!("In-game reference ({}): several full-map openings did not match, collecting again", info.name);
             let _ = mtc_maps::remove_game_reference(info);
             self.reference_generation += 1;
             return;
         }
         if let Some(path) = g.offer(info, frame, &MapTransform::fixed(MapView::Full, origin), self.opening, Instant::now()) {
-            println!("In-game reference ({}): composed and saved to {}; the full map registers against it now", info.name, path.display());
+            log::info!("In-game reference ({}): composed and saved to {}; the full map registers against it now", info.name, path.display());
             self.reference_generation += 1;
         }
     }
@@ -1612,7 +1612,7 @@ impl MapPipeline {
         };
         self.canvas.correct(fresh, Instant::now());
         self.full_transform = Some(fresh);
-        println!("V1 zoom 1.0x (no reference picture, tracked from the input)");
+        log::info!("V1 zoom 1.0x (no reference picture, tracked from the input)");
         (fresh, true)
     }
 
@@ -1620,7 +1620,7 @@ impl MapPipeline {
         self.report_canvas();
         let s = std::mem::take(&mut self.track_stats);
         self.rebase_streak = 0;
-        println!(
+        log::info!(
             "V1 checks while moving: {} ({} matched a diamond), {:.1} ms each; canvas rebased on a diamond {} times",
             s.frames,
             s.fitted,

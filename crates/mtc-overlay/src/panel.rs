@@ -412,7 +412,7 @@ impl PanelWindow {
         }
         if let Some(t) = self.trace.take() {
             let span = (t.last - t.started).as_secs_f64() * 1000.0;
-            println!(
+            log::info!(
                 "[overlay] panel drag: {} moves, {span:.0} ms, mean gap {:.1} ms, longest {:.1} ms",
                 t.moves,
                 span / f64::from(t.moves.saturating_sub(1).max(1)),

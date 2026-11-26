@@ -63,14 +63,14 @@ impl UiText {
                 Ok(Ok(reader)) => {
                     self.job = None;
                     if for_layout == layout {
-                        println!("UI text templates for {} ready: the loading UI is read now", describe(layout));
+                        log::info!("UI text templates for {} ready: the loading UI is read now", describe(layout));
                         self.ready = Some(layout);
                         return Some(reader);
                     }
                 }
                 Ok(Err(e)) => {
                     self.job = None;
-                    println!("UI text templates could not be made ({}): {e}; the loading UI is not read at this configuration", describe(for_layout));
+                    log::info!("UI text templates could not be made ({}): {e}; the loading UI is not read at this configuration", describe(for_layout));
                     self.failed = Some(for_layout);
                 }
                 Err(TryRecvError::Disconnected) => self.job = None,

@@ -207,10 +207,10 @@ impl ShotLog {
                         unseen.push((k, outcome));
                         match shot.predicted {
                             Some(p) => match maps.objective_over(p.map) {
-                                Some(letter) => println!("Shot {}: due to land after {:.1} s, {:.0} m out, under objective {letter}'s icon; its X was not seen (hidden by the icon)", shot.n, p.time_s, p.distance_m),
-                                None => println!("Shot {}: due to land after {:.1} s, {:.0} m out; its X was not seen", shot.n, p.time_s, p.distance_m),
+                                Some(letter) => log::info!("Shot {}: due to land after {:.1} s, {:.0} m out, under objective {letter}'s icon; its X was not seen (hidden by the icon)", shot.n, p.time_s, p.distance_m),
+                                None => log::info!("Shot {}: due to land after {:.1} s, {:.0} m out; its X was not seen", shot.n, p.time_s, p.distance_m),
                             },
-                            None => println!("Shot {}: no prediction (shell, readout or gun missing) and no X matched", shot.n),
+                            None => log::info!("Shot {}: no prediction (shell, readout or gun missing) and no X matched", shot.n),
                         }
                     }
                 }
@@ -339,7 +339,7 @@ impl ShotLog {
         };
         let landing = predicted.map_or(", no prediction".to_owned(), |p| format!(", predicted {:.1} m out, landing after {:.1} s", p.distance_m, p.time_s));
         let unsure = shot.unsure.as_ref().map_or(String::new(), |u| format!(" (the readout may not be the one fired at: {u})"));
-        println!("Shot {} ({}){note}: fired between {:.1} and {:.1} s, {read}{from}{landing}{unsure}", shot.n, shot.shell.as_deref().unwrap_or("shell unknown"), lit_ms as f64 / 1000.0, dark_ms as f64 / 1000.0);
+        log::info!("Shot {} ({}){note}: fired between {:.1} and {:.1} s, {read}{from}{landing}{unsure}", shot.n, shot.shell.as_deref().unwrap_or("shell unknown"), lit_ms as f64 / 1000.0, dark_ms as f64 / 1000.0);
     }
 
     /// Joins an X to the shot it is: landed about when predicted, near the predicted point; of
@@ -383,7 +383,7 @@ impl ShotLog {
                 shot.impact = Some(impact);
                 self.shots.push(shot);
             }
-            None => println!("Impact #{}: no shot matches (none predicted to land near it about then)", impact.id),
+            None => log::info!("Impact #{}: no shot matches (none predicted to land near it about then)", impact.id),
         }
     }
 
@@ -393,7 +393,7 @@ impl ShotLog {
         let m = miss(gun.map, azimuth, &p, impact.map, map.size_m(), impact.landed_ms as f64, shot.lands_ms().unwrap_or(0.0));
         let when = if m.late_s >= 0.0 { format!("{:.1} s late", m.late_s) } else { format!("{:.1} s early", -m.late_s) };
         let caveat = shot.unsure.as_ref().map_or(String::new(), |u| format!("; this shot's miss is not reliable ({u})"));
-        println!(
+        log::info!(
             "Shot {} impact #{}: {:.1} m out at azimuth {:.2}°; against the prediction {:+.1} m along, {:+.1} m across (right positive), landed {when} (X seen on a map at {:.1} m per pixel){caveat}",
             shot.n,
             impact.id,

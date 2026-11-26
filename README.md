@@ -58,13 +58,15 @@ MTC Calculator sits on top of Roblox while you crew the artillery in Multicrew T
 - Draws the predicted landing point on the map, and spots where each shell actually lands.
 - Works at any window size and Windows display scaling.
 - Downloads map pictures, heightmaps and ammunition data on first use and keeps them up to date.
-- Light on your PC: about 0.15 of one CPU core and under 100 MB of memory in the matches we measured.
+- Light on your PC: 0.15 to 0.3 of one CPU core and 100 to 200 MB of memory in the matches we measured.
 
 ## Getting started
 
-1. Download the latest version from [Releases](https://github.com/Akureyri-i/mtc-calc/releases/latest) and unzip it anywhere.
-2. Start Roblox, join Multicrew Tank Combat, then run `mtc-hud.exe`.
+1. Download `MTC-Calculator.exe` from [Releases](https://github.com/Akureyri-i/mtc-calc/releases/latest) and put it anywhere. There is nothing to install.
+2. Start Roblox, join Multicrew Tank Combat, then run `MTC-Calculator.exe`.
 3. Take an artillery seat and open the full map once. Mark targets as usual.
+
+It has no window of its own: look for its icon in the notification area at the bottom right of the screen. Right-click it to open the log folder or quit.
 
 Needs 64-bit Windows 10 or 11 and the Roblox desktop app.
 
@@ -95,6 +97,12 @@ Yes. It adapts to the window size and the Windows scaling setting; we play it on
 </details>
 
 <details>
+<summary><b>Windows says it protected my PC. Is it safe?</b></summary>
+<br>
+Windows shows this for programs that are not signed with a paid certificate, which this one is not. Click <i>More info</i>, then <i>Run anyway</i>. The source code is all here, and you can build the program yourself (see below).
+</details>
+
+<details>
 <summary><b>Something looks wrong. How do I report it?</b></summary>
 <br>
 Open the settings, choose <i>Create report</i> under Problem report, and attach the folder it opens to a GitHub issue. Tick <i>Screenshots</i> if the problem is something you can see; player names are blacked out.
@@ -108,6 +116,8 @@ You need Windows and a recent stable Rust (edition 2024).
 cargo build --release
 cargo test --release
 ```
+
+That build opens a console window for its output, which is handy while developing. The release program is built with `cargo build --release -p mtc-hud --features gui`: no console, the output goes only to the log file.
 
 The tests that need recorded gameplay skip themselves when the recordings are not on the machine.
 

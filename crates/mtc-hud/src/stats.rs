@@ -499,7 +499,7 @@ impl Stats {
         let game_frame = self.game_intervals.get(self.game_intervals.len() / 2).copied().unwrap_or(f64::NAN);
         let memory = memory_mb();
         let video = video_memory_mb();
-        println!(
+        log::info!(
             "[stats] game frame median {game_frame:.1} ms · arrived {:.0} fps · processed {:.0} fps · readout read {} unreadable {} absent {} · readback {:.2} ms ({:.0} KB) · decode {:.2} ms · latency median {:.1} ms / p95 {:.1} ms · frame age median {age:.1} ms · per frame {:.2} ms · skipped frame {:.3} ms · map {:.1}/s x {:.2} ms · mark redraws {:.1}/s x {:.2} ms · solutions {:.1}/s x {:.0} ms · loading UI {:.1}/s x {:.2} ms · seats {:.1}/s x {:.2} ms · CPU {:.3} cores (by clock ticks {:.3}) · memory {:.0} MB (private {:.0} MB: heap {:.0} MB, the rest the driver's, the capture library's and the system's; video memory local {} MB, shared {} MB)",
             self.frames_arrived as f64 / elapsed,
             n / elapsed,
@@ -548,7 +548,7 @@ impl Stats {
                 if n > 0 { format!("{name} {cores:.4} ({:.1}/s × {:.2} ms)", f64::from(n) / elapsed, c as f64 / hz * 1000.0 / f64::from(n)) } else { format!("{name} {cores:.4}") }
             })
             .collect();
-        println!("[CPU parts] {} · other {:.4} · frame callback total {handler_cores:.4} cores", parts.join(" · "), (handler_cores - counted).max(0.0));
+        log::info!("[CPU parts] {} · other {:.4} · frame callback total {handler_cores:.4} cores", parts.join(" · "), (handler_cores - counted).max(0.0));
         let mut named: Vec<(String, f64)> = Vec::new();
         let mut unnamed: Vec<(String, f64, u32)> = Vec::new();
         let (mut other, mut others) = (0.0, 0);
@@ -580,7 +580,7 @@ impl Stats {
             .filter(|(_, c)| *c >= 0.0005)
             .map(|(n, c)| if n == "capture" { format!("capture {c:.3} (HUD work {handler_cores:.3}, capture library and messages {:.3})", (c - handler_cores).max(0.0)) } else { format!("{n} {c:.3}") })
             .collect();
-        println!("[threads] {} · {others} unnamed {other:.3} cores (by start module: {})", parts.join(" · "), by_module.join(" · "));
+        log::info!("[threads] {} · {others} unnamed {other:.3} cores (by start module: {})", parts.join(" · "), by_module.join(" · "));
         let report = crate::diag::Report {
             cpu_cores: (cpu - self.cpu_at) / elapsed,
             working_set_mb: memory.0,

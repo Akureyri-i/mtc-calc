@@ -52,7 +52,7 @@ impl GameReference {
         self.frames.push(crop(frame, base)?);
         self.openings.push(opening);
         self.last_take = Some(now);
-        println!("In-game reference ({}): frame {} (full map opened {} times)", info.name, self.frames.len(), opening);
+        log::info!("In-game reference ({}): frame {} (full map opened {} times)", info.name, self.frames.len(), opening);
         if self.frames.len() < FRAMES || self.openings.len() < OPENINGS {
             return None;
         }
@@ -65,7 +65,7 @@ impl GameReference {
                 Some(path)
             }
             Err(e) => {
-                eprintln!("In-game reference could not be saved ({e})");
+                log::warn!("In-game reference could not be saved ({e})");
                 None
             }
         }

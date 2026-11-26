@@ -448,7 +448,7 @@ impl FireControl {
         {
             let (point, from) = mtc_ammo::launch_point(&p.weapon);
             let source = from.map_or("measured".to_owned(), |f| format!("not measured, borrowed from {f}"));
-            println!("Launch point ({}): {:.2} m above ground, {:.1} m ahead of the arrow ({source})", p.weapon, point.height_m, point.ahead_m);
+            log::info!("Launch point ({}): {:.2} m above ground, {:.1} m ahead of the arrow ({source})", p.weapon, point.height_m, point.ahead_m);
             self.launch_printed = Some(p.weapon.clone());
         }
         let gun = self.gun.map(|g| g.map)?;
@@ -688,7 +688,7 @@ impl FireControl {
                     return;
                 }
                 result = attempt_load();
-                println!("Heightmap {}: retry {attempt} {}", map.id, if result.is_ok() { "downloaded" } else { "failed again" });
+                log::info!("Heightmap {}: retry {attempt} {}", map.id, if result.is_ok() { "downloaded" } else { "failed again" });
             };
             // The terrain layer follows, outside the lock (it may be downloaded): the solutions use
             // the heightmap meanwhile, obstructions only warned about, and are computed again once
@@ -703,7 +703,7 @@ impl FireControl {
                 }
                 let (terrain, retry) = terrain_layer(map, background);
                 if attempt > 0 {
-                    println!("Terrain layer {}: retry {attempt} {}", map.id, if terrain.is_some() { "downloaded" } else { "failed again" });
+                    log::info!("Terrain layer {}: retry {attempt} {}", map.id, if terrain.is_some() { "downloaded" } else { "failed again" });
                 }
                 if terrain.is_some() {
                     let mut guard = slot.lock().expect("heights lock");
@@ -730,18 +730,18 @@ impl FireControl {
 /// only once checked against the published one for this heightmap (`mtc_maps::fetch_terrain`);
 /// replays and tests read the cache as it is, offline.
 fn terrain_layer(map: &MapInfo, live: bool) -> (Option<Heightmap>, bool) {
-    let load = || mtc_maps::load_terrain(map).map_err(|e| eprintln!("Terrain layer {} unreadable ({e}): obstructions only warned", map.id)).ok().flatten();
+    let load = || mtc_maps::load_terrain(map).map_err(|e| log::warn!("Terrain layer {} unreadable ({e}): obstructions only warned", map.id)).ok().flatten();
     if !live {
         return (load(), false);
     }
     match mtc_maps::fetch_terrain(map) {
         mtc_maps::TerrainStatus::Ready => (load(), false),
         mtc_maps::TerrainStatus::Unpublished => {
-            println!("Terrain layer {}: none published for this heightmap; obstructions only warned", map.id);
+            log::info!("Terrain layer {}: none published for this heightmap; obstructions only warned", map.id);
             (None, false)
         }
         mtc_maps::TerrainStatus::Unreachable(e) => {
-            eprintln!("Terrain layer {}: not downloaded ({e}); obstructions only warned until it is", map.id);
+            log::warn!("Terrain layer {}: not downloaded ({e}); obstructions only warned until it is", map.id);
             (None, true)
         }
     }
@@ -1039,8 +1039,7 @@ impl FireControl {
             let _ = writeln!(out, "  suggested charge {} ({:.2}°, {:.1} s)", r.charge.word(), r.arc.elevation, r.arc.time_of_flight);
         }
         if out != self.printed {
-            print!("{out}  (computed in {cost_ms:.0} ms)
-");
+            log::info!("{out}  (computed in {cost_ms:.0} ms)");
             self.printed = out;
         }
     }

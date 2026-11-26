@@ -198,10 +198,10 @@ pub fn note(event: Event) {
 
 /// Counts panics for the run record (the message still goes to the log).
 pub fn count_panics() {
-    let previous = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
+    // Into the log (and, in development builds, onto the console through it).
+    std::panic::set_hook(Box::new(|info| {
         PANICS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        previous(info);
+        log::error!("thread '{}' {info}", std::thread::current().name().unwrap_or("unnamed"));
     }));
 }
 
@@ -454,9 +454,9 @@ impl Diag {
                 let body = format!("{waiting}{run}\n");
                 let agent = ureq::AgentBuilder::new().timeout_connect(Duration::from_secs(10)).timeout_read(Duration::from_secs(20)).build();
                 match agent.post(&url).set("Content-Type", "application/x-ndjson").send_string(&body) {
-                    Ok(_) => println!("Statistics: sent {} lines", body.lines().count()),
+                    Ok(_) => log::info!("Statistics: sent {} lines", body.lines().count()),
                     Err(error) => {
-                        println!("Statistics: not sent ({error}), trying again later");
+                        log::info!("Statistics: not sent ({error}), trying again later");
                         let lines: Vec<String> = waiting.lines().map(str::to_owned).collect();
                         let _guard = lock.lock();
                         append_capped(&path, &lines);

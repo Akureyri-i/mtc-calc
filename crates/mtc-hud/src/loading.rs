@@ -232,10 +232,10 @@ fn ammo_data_path() -> Option<PathBuf> {
     if cached.is_file() {
         return Some(cached);
     }
-    println!("Ammunition data: none on this computer, downloading from the wiki data service");
+    log::info!("Ammunition data: none on this computer, downloading from the wiki data service");
     match mtc_ammo::fetch::download_shells() {
         Ok(_) => return Some(cached),
-        Err(e) => eprintln!("Ammunition data could not be downloaded: {e}"),
+        Err(e) => log::warn!("Ammunition data could not be downloaded: {e}"),
     }
     let root = PathBuf::from("reference/wiki");
     let mut found: Vec<PathBuf> = std::fs::read_dir(&root)
@@ -258,10 +258,10 @@ fn install_weapon_table() {
         Some(table) => {
             let count = table.weapons.len();
             if table.install() {
-                println!("Artillery weapons: wiki data, {count}");
+                log::info!("Artillery weapons: wiki data, {count}");
             }
         }
-        None => println!("Artillery weapons: the built-in table ({}), wiki data downloading in the background", mtc_ammo::WeaponTable::current().weapons.len()),
+        None => log::info!("Artillery weapons: the built-in table ({}), wiki data downloading in the background", mtc_ammo::WeaponTable::current().weapons.len()),
     }
 }
 
@@ -279,11 +279,11 @@ fn retry_ammo_data(arrived: std::sync::Arc<std::sync::Mutex<Option<AmmoData>>>) 
                     .and_then(|json| AmmoData::from_json(&json).ok());
                 match data {
                     Some(data) => {
-                        println!("Ammunition data: downloaded on retry {}", attempt + 1);
+                        log::info!("Ammunition data: downloaded on retry {}", attempt + 1);
                         *arrived.lock().expect("ammo slot") = Some(data);
                         return;
                     }
-                    None => println!("Ammunition data: retry {} failed again, next try in {} s", attempt + 1, crate::retry::delay(attempt + 1).as_secs()),
+                    None => log::info!("Ammunition data: retry {} failed again, next try in {} s", attempt + 1, crate::retry::delay(attempt + 1).as_secs()),
                 }
             }
         })
@@ -301,16 +301,16 @@ fn refresh_wiki_data(shells: bool) {
     std::thread::Builder::new().name("wiki-refresh".into()).spawn(move || {
         if shells {
             match mtc_ammo::fetch::download_shells() {
-                Ok(true) => println!("Ammunition data updated in the background, used from the next start"),
+                Ok(true) => log::info!("Ammunition data updated in the background, used from the next start"),
                 Ok(false) => {}
-                Err(e) => eprintln!("Ammunition data could not be updated ({e}), using the cached copy"),
+                Err(e) => log::warn!("Ammunition data could not be updated ({e}), using the cached copy"),
             }
         }
         if weapons {
             match mtc_ammo::fetch::download_weapons() {
-                Ok(true) => println!("Artillery weapons updated in the background, used from the next start"),
+                Ok(true) => log::info!("Artillery weapons updated in the background, used from the next start"),
                 Ok(false) => {}
-                Err(e) => eprintln!("Artillery weapons could not be updated ({e}), keeping the current table"),
+                Err(e) => log::warn!("Artillery weapons could not be updated ({e}), keeping the current table"),
             }
         }
     }).expect("wiki refresh thread");
@@ -341,14 +341,14 @@ impl LoadingPipeline {
         let ammo = ammo_data_path().and_then(|p| {
             let data = std::fs::read_to_string(&p).ok().and_then(|json| AmmoData::from_json(&json).ok());
             match &data {
-                Some(_) => println!("Ammunition data: {}", p.display()),
-                None => println!("Ammunition data unreadable: {}", p.display()),
+                Some(_) => log::info!("Ammunition data: {}", p.display()),
+                None => log::info!("Ammunition data unreadable: {}", p.display()),
             }
             data
         });
         let ammo_arrived = std::sync::Arc::new(std::sync::Mutex::new(None));
         if ammo.is_none() {
-            println!("No ammunition data: only slots and charges are reported");
+            log::info!("No ammunition data: only slots and charges are reported");
             if std::env::var_os("MTC_AMMO_DATA").is_none() {
                 retry_ammo_data(ammo_arrived.clone());
             }
@@ -440,7 +440,7 @@ impl LoadingPipeline {
             self.countdown_box = Some(found);
             let (x0, y0, x1, y1) = found.interior;
             let (r0, s0, r1, s1) = COUNTDOWN_BOX.interior;
-            println!("Loading countdown bar: on screen at x {x0}–{x1}, y {y0}–{y1} (reference geometry; at the reference x {r0}–{r1}, y {s0}–{s1})");
+            log::info!("Loading countdown bar: on screen at x {x0}–{x1}, y {y0}–{y1} (reference geometry; at the reference x {r0}–{r1}, y {s0}–{s1})");
             crate::diag::note(crate::diag::Event::Countdown(found.interior));
         }
         Some(found)
@@ -603,7 +603,7 @@ impl LoadingPipeline {
         {
             self.labels = data.label_texts();
             self.ammo = Some(data);
-            println!("Ammunition data: using the copy a retry downloaded");
+            log::info!("Ammunition data: using the copy a retry downloaded");
         }
         // A press the screen did not confirm while the gun read loaded may be a shot missed; only
         // for artillery (a tank's or a machine gun's F printed it 558 times in one match).
@@ -612,7 +612,7 @@ impl LoadingPipeline {
             && self.artillery
         {
             let when = if until == PENDING || until > k + FIRE_CONFIRM_MS { " (pressed on the full or scope map, waited until back on the minimap view)".to_owned() } else { String::new() };
-            println!("F with no shot confirmed on screen within {FIRE_CONFIRM_MS} ms{when} ({:.1} s): recorded later if an X matches the prediction", k as f64 / 1000.0);
+            log::info!("F with no shot confirmed on screen within {FIRE_CONFIRM_MS} ms{when} ({:.1} s): recorded later if an X matches the prediction", k as f64 / 1000.0);
             self.unconfirmed.push(k);
         }
         self.fire_keys.retain(|&(k, until)| Self::open(k, until, now_ms) || k > now_ms);
@@ -694,10 +694,10 @@ impl LoadingPipeline {
         if let Some(key) = self.m_on_v3 {
             let after = now_ms.saturating_sub(key);
             if menu.is_none() {
-                println!("Loading menu: gone {after} ms after M");
+                log::info!("Loading menu: gone {after} ms after M");
                 self.m_on_v3 = None;
             } else if after >= BACK_ON_V3_MS {
-                println!("Loading menu: still read {BACK_ON_V3_MS} ms after M");
+                log::info!("Loading menu: still read {BACK_ON_V3_MS} ms after M");
                 self.m_on_v3 = None;
             }
         }
@@ -710,12 +710,12 @@ impl LoadingPipeline {
         if let Some(back) = self.back_on_v3 {
             let shown = if self.menu_restored { ", the menu from before leaving shown meanwhile" } else { "" };
             if menu.is_some() {
-                println!("Loading menu: read {} ms after back on V3{shown}", now_ms.saturating_sub(back));
+                log::info!("Loading menu: read {} ms after back on V3{shown}", now_ms.saturating_sub(back));
                 self.back_on_v3 = None;
                 self.menu_restored = false;
             } else if !fading_in {
                 if self.menu_restored {
-                    println!("Loading menu: not read {BACK_ON_V3_MS} ms after back on V3, the menu from before dropped");
+                    log::info!("Loading menu: not read {BACK_ON_V3_MS} ms after back on V3, the menu from before dropped");
                 }
                 self.back_on_v3 = None;
                 self.menu_restored = false;
@@ -762,9 +762,9 @@ impl LoadingPipeline {
                     self.fired_reads = 0;
                     self.awaiting_load = true;
                     self.reload_seen = false;
-                    println!("Fired: {what}{}", self.key_note(now_ms));
+                    log::info!("Fired: {what}{}", self.key_note(now_ms));
                 }
-                None => println!("{what} with no F pressed before: no shot recorded (seat or vehicle change, or a menu opened){keys}"),
+                None => log::info!("{what} with no F pressed before: no shot recorded (seat or vehicle change, or a menu opened){keys}"),
             }
         }
         // A loading started: whatever was fired, the next shell is coming.
@@ -775,17 +775,17 @@ impl LoadingPipeline {
             match event {
                 LoadingEvent::Started { slot } => match slot {
                     Some(s) => {
-                        println!("Loading: slot {}", s + 1);
+                        log::info!("Loading: slot {}", s + 1);
                         let charge = self.tracker.charges().get(s).copied().unwrap_or(SlotCharge::Unknown);
                         self.pick(self.with_shown_charge(Loaded { slot: s, charge }));
                     }
-                    None => println!("Loading"),
+                    None => log::info!("Loading"),
                 },
                 LoadingEvent::Loaded(loaded) => {
                     self.fired = false;
                     self.awaiting_load = false;
                     let loaded = self.with_shown_charge(loaded);
-                    println!("Loaded: {}", self.describe(loaded));
+                    log::info!("Loaded: {}", self.describe(loaded));
                     crate::diag::note(crate::diag::Event::Load);
                     self.pick(loaded);
                     self.bar_check = true;
@@ -850,9 +850,9 @@ impl LoadingPipeline {
                             self.awaiting_load = true;
                             self.reload_seen = false;
                             self.shot = Some(shot);
-                            println!("Fired: no lit slot on the ammo bar, waiting for the next loading{}", self.key_note(now_ms));
+                            log::info!("Fired: no lit slot on the ammo bar, waiting for the next loading{}", self.key_note(now_ms));
                         }
-                        None => println!("No lit slot on the ammo bar with no F pressed before: no shot recorded{keys}"),
+                        None => log::info!("No lit slot on the ammo bar with no F pressed before: no shot recorded{keys}"),
                     }
                 }
             }
@@ -893,9 +893,9 @@ impl LoadingPipeline {
             if !self.current_is(bar) {
                 let loaded = bar.loaded;
                 match self.pick_by_kind(bar) {
-                    Some(name) => println!("Ammo bar: slot {} · {} · icon {} → {name}", loaded.slot + 1, charge_name(loaded.charge), bar.kind.unwrap_or("")),
+                    Some(name) => log::info!("Ammo bar: slot {} · {} · icon {} → {name}", loaded.slot + 1, charge_name(loaded.charge), bar.kind.unwrap_or("")),
                     None => {
-                        println!("Ammo bar: slot {} · {} · icon {} (shell not decided)", loaded.slot + 1, charge_name(loaded.charge), bar.kind.unwrap_or("not recognised"));
+                        log::info!("Ammo bar: slot {} · {} · icon {} (shell not decided)", loaded.slot + 1, charge_name(loaded.charge), bar.kind.unwrap_or("not recognised"));
                         self.current = None;
                     }
                 }
@@ -1005,7 +1005,7 @@ impl LoadingPipeline {
     /// Another weapon on screen (another vehicle or seat): the old weapon's cards, charges and
     /// loaded shell go, and nothing shows until the new one is decided.
     fn switch_weapon(&mut self, label: &str) {
-        println!("Weapon changed: screen \"{label}\" (before \"{}\")", self.vehicle_label.as_deref().unwrap_or(""));
+        log::info!("Weapon changed: screen \"{label}\" (before \"{}\")", self.vehicle_label.as_deref().unwrap_or(""));
         self.vehicle_label = Some(label.to_owned());
         self.label_change = None;
         self.weapon = None;
@@ -1089,7 +1089,7 @@ impl LoadingPipeline {
             return;
         };
         if self.weapon.as_deref() != Some(weapon) {
-            println!("Weapon: {weapon} (screen \"{label}\", cards {names:?})");
+            log::info!("Weapon: {weapon} (screen \"{label}\", cards {names:?})");
             crate::diag::note(crate::diag::Event::Weapon(weapon.to_owned()));
             // Another weapon (another vehicle) has other cards; a correction by the cards keeps them.
             if self.weapon.is_some() && names.is_empty() {
@@ -1102,7 +1102,7 @@ impl LoadingPipeline {
         let artillery = mtc_ammo::is_artillery_weapon(weapon);
         if artillery != self.artillery {
             if !artillery {
-                println!("Weapon {weapon} is not artillery: no HUD");
+                log::info!("Weapon {weapon} is not artillery: no HUD");
             }
             self.artillery = artillery;
         }
@@ -1147,7 +1147,7 @@ impl LoadingPipeline {
         let charges = self.tracker.charges();
         if charges != self.reported_charges.as_slice() && !charges.contains(&SlotCharge::Unknown) {
             let list: Vec<String> = charges.iter().enumerate().map(|(i, &c)| format!("#{} {}", i + 1, charge_name(c))).collect();
-            println!("Charges: {}", list.join(" · "));
+            log::info!("Charges: {}", list.join(" · "));
             self.reported_charges = charges.to_vec();
         }
     }

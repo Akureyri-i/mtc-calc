@@ -1,5 +1,7 @@
 # Build output
 /target/
+# The packaged release program
+/dist/
 # Recorded gameplay for the dataset tests stays on your machine
 /datasets/
 # Temporary output of the development examples
