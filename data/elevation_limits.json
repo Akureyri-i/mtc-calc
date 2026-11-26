@@ -1,0 +1,11 @@
+{
+ "source": "Elevation ranges (degrees, as the game's readout shows them on flat ground) checked against the readout in recordings: the HUD marks arcs outside them. Barrels match the wiki turret range (data/artillery_weapons.json); mortars count from a resting angle there. Add a weapon once its readout has shown both ends. Weapons not listed take the wiki turret range (mtc_ammo::elevation_limits); guns whose barrel or launcher meets the hull at some headings (2S7, M270, BM-21) are not added from the readout: what it reaches varies with the heading and the ground's tilt.",
+ "weapons": [
+  {"name": "155mm M284", "elevation": [-3, 75], "checked": "M109A6: readout -3.04 .. +75.03"},
+  {"name": "152mm 2A64", "elevation": [-3, 52], "checked": "2S19: readout -3.15 .. +52.53"},
+  {"name": "152mm 2A64M", "elevation": [-3, 52], "checked": "2S33 (the 2S19's conversion, same turret as the 2A64): -3 .. +52 read in game. The wiki's -3 .. 70 joins the 2S43's turret (0 .. 70); a 2S43's readings above 52 widen the range (plan::beyond_reach)"},
+  {"name": "155mm L62", "elevation": [-2.5, 65], "checked": "PzH 2000: readout -2.45 .. +65.58"},
+  {"name": "122mm D-30", "elevation": [-5, 45], "checked": "D-30: readout -5.00 .. +45.00"},
+  {"name": "60mm M2", "elevation": [40, 85], "checked": "60 mm mortar: readout +40.00 .. +85.00 (wiki -12.5 .. 32.5 from a 52.5 degree rest)"}
+ ]
+}

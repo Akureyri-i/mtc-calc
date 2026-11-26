@@ -1,0 +1,17 @@
+# The statistics receiver's deployment (worker.js): on its own domain only (workers.dev is not
+# reachable from mainland China), a D1 database, a daily clean-up.
+#   cd tools/diag && npx wrangler@4 deploy
+# The wrangler login stays in wrangler's own folder in the user profile, never in the repository.
+name = "mtc-stats"
+main = "worker.js"
+compatibility_date = "2026-11-01"
+workers_dev = false
+routes = [{ pattern = "stats.mtc-calc.dev", custom_domain = true }]
+
+[triggers]
+crons = ["17 3 * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "mtc-stats"
+database_id = "2a63704d-da24-49db-b4b6-117844068170"

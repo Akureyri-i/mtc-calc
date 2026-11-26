@@ -1,0 +1,20 @@
+[package]
+name = "mtc-recorder"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+clap = { version = "4.6.7", features = ["derive"] }
+crossbeam-channel = "0.5.17"
+ctrlc = "3.5.2"
+mtc-capture = { version = "0.1.0", path = "../mtc-capture" }
+mtc-dataset = { version = "0.1.0", path = "../mtc-dataset" }
+mtc-input = { path = "../mtc-input" }
+mtc-vision = { path = "../mtc-vision" }
+png = "0.18.1"
+qoi = "0.4.1"
+serde_json = "1.0.154"
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging", "Win32_System_Diagnostics_Debug"] }
+windows-capture = "2"

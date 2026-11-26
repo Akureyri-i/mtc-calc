@@ -1,0 +1,229 @@
+{
+ "source": "The MTC wiki data's vehicles.json and placeables.json (production 1.0.0), built the way mtc_ammo::WeaponTable builds it from a fresh download",
+ "weapons": [
+  {
+   "name": "105mm M2A1",
+   "wiki_elevation": [
+    -5,
+    35
+   ]
+  },
+  {
+   "name": "120mm M120",
+   "wiki_elevation": [
+    -20,
+    15
+   ]
+  },
+  {
+   "name": "122mm D-30",
+   "wiki_elevation": [
+    -5,
+    45
+   ]
+  },
+  {
+   "name": "122mm Grad",
+   "wiki_elevation": [
+    -15,
+    55
+   ]
+  },
+  {
+   "name": "150 mm Wgr.41 Spr rocket",
+   "wiki_elevation": [
+    -7,
+    40
+   ]
+  },
+  {
+   "name": "152mm 2A33",
+   "wiki_elevation": [
+    -5,
+    45
+   ]
+  },
+  {
+   "name": "152mm 2A64",
+   "wiki_elevation": [
+    -3,
+    52
+   ]
+  },
+  {
+   "name": "152mm 2A64M",
+   "wiki_elevation": [
+    -3,
+    70
+   ]
+  },
+  {
+   "name": "155mm L62",
+   "wiki_elevation": [
+    -2.5,
+    65
+   ]
+  },
+  {
+   "name": "155mm M185",
+   "wiki_elevation": [
+    -3,
+    75
+   ]
+  },
+  {
+   "name": "155mm M284",
+   "wiki_elevation": [
+    -3,
+    75
+   ]
+  },
+  {
+   "name": "203mm 2A44",
+   "wiki_elevation": [
+    -0.01,
+    60
+   ]
+  },
+  {
+   "name": "212mm RBU-6000",
+   "wiki_elevation": [
+    -7,
+    45
+   ]
+  },
+  {
+   "name": "220mm TOS-1A",
+   "wiki_elevation": [
+    -1,
+    45
+   ]
+  },
+  {
+   "name": "227mm M269",
+   "wiki_elevation": [
+    0,
+    45
+   ]
+  },
+  {
+   "name": "30mm AG-30",
+   "wiki_elevation": [
+    -4,
+    74
+   ]
+  },
+  {
+   "name": "30mm AGS-17",
+   "wiki_elevation": [
+    -15,
+    45
+   ]
+  },
+  {
+   "name": "380mm RW61",
+   "wiki_elevation": [
+    -1,
+    72
+   ]
+  },
+  {
+   "name": "40mm MK-19",
+   "wiki_elevation": [
+    -15,
+    45
+   ]
+  },
+  {
+   "name": "60 mm Soltam Mortar",
+   "wiki_elevation": [
+    -25,
+    60
+   ]
+  },
+  {
+   "name": "60mm M2",
+   "wiki_elevation": [
+    -12.5,
+    32.5
+   ]
+  },
+  {
+   "name": "7.2 in T37",
+   "wiki_elevation": [
+    -10,
+    25
+   ]
+  },
+  {
+   "name": "F-82 Automatic Mortar",
+   "wiki_elevation": [
+    -1.16,
+    85
+   ]
+  },
+  {
+   "name": "FB-10A",
+   "wiki_elevation": [
+    -9,
+    85
+   ]
+  },
+  {
+   "name": "L9A1 165mm",
+   "wiki_elevation": [
+    -10,
+    18
+   ]
+  },
+  {
+   "name": "M8 Rocket",
+   "wiki_elevation": [
+    -10,
+    25
+   ]
+  },
+  {
+   "name": "Mörser Karl 600mm",
+   "wiki_elevation": [
+    -1,
+    70
+   ]
+  },
+  {
+   "name": "Propane Cannon",
+   "wiki_elevation": [
+    -30,
+    30
+   ]
+  },
+  {
+   "name": "Rocketetet",
+   "wiki_elevation": [
+    -1,
+    45
+   ]
+  },
+  {
+   "name": "SS-26",
+   "wiki_elevation": [
+    -25,
+    0
+   ]
+  },
+  {
+   "name": "TT-250 Tank Torpedo",
+   "wiki_elevation": [
+    -8,
+    33
+   ]
+  },
+  {
+   "name": "UB-32",
+   "wiki_elevation": [
+    -7,
+    45
+   ]
+  }
+ ]
+}

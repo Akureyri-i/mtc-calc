@@ -1,0 +1,21 @@
+{
+ "source": "Where each gun's shell leaves it relative to the player's arrow: height_m above the ground under the arrow, ahead_m in front of it along the line of fire (mtc_ballistics::LaunchPoint). Fitted (landings interpolated between frames, as the HUD's solver) to shots measured in game, by crates/mtc-ballistics/examples/calibration_fit.rs. Weapons not measured take a measured one's (like); the rest take default. Most measured shots were fired east or west; L9A1's were fired at 41-82 and 182 degrees and fit with ahead_m along the line of fire.",
+ "measured": [
+  {"weapon": "155mm M284", "height_m": 2.5, "ahead_m": 13.5, "from": "M109A6, debug map, 10 shots 2-60 degrees, RMS 3.0 m"},
+  {"weapon": "155mm M185", "height_m": 0.8, "ahead_m": 11.5, "from": "M109, Zone 11 and Arctic Airbase, 11 shots M107 Low 10.5-24 degrees (gun on the zoomed V1), RMS 4.9 m; the height is loose there (0-2.35 m). M284's values missed these by -8.2 m (RMS 9.8 m)"},
+  {"weapon": "L9A1 165mm", "height_m": 2.4, "ahead_m": 7.4, "from": "Centurion AVRE, Roinburg and Normandy Bocage, 19 shots L33A1 2.1-10.6 degrees timed by the fire key, RMS 4.2 m; height 1.9-2.9 m. M284's values missed these by -6.7 m (RMS 7.9 m)"},
+  {"weapon": "122mm D-30", "height_m": 1.3, "ahead_m": 22.8, "from": "debug map, 8 shots 0.6-24 degrees, RMS 3.8 m"},
+  {"weapon": "152mm 2A64M", "height_m": 2.75, "ahead_m": 17.0, "from": "2S33, Fulvia Gap, 14 shots 2.9-15.8 degrees over the heightmap, RMS 1.1 m; then 38 shots on Zone 11, Arctic Airbase and Fulvia Gap (gun on the zoomed V1), mean miss +0.1 m, RMS 5.1 m"},
+  {"weapon": "60mm M2", "height_m": 0.0, "ahead_m": 4.5, "from": "debug map, 1 shot at 60.7 degrees: the height does not show at that angle"}
+ ],
+ "like": {
+  "152mm 2A64": "152mm 2A64M",
+  "120mm M120": "60mm M2",
+  "60 mm Soltam Mortar": "60mm M2",
+  "F-82 Automatic Mortar": "60mm M2",
+  "30mm AGS-17": "122mm D-30",
+  "Propane Cannon": "122mm D-30",
+  "UB-32": "122mm D-30"
+ },
+ "default": "155mm M284"
+}

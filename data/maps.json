@@ -1,0 +1,319 @@
+{
+ "source": "grand-hawk/artillery-calculator packages/mtc-artillery/src/config/maps.ts @ 8c83e02",
+ "rotation": "in_rotation: the maps of the multiplayer rotation as seen in game; old Dustbowl is no longer in it",
+ "maps": [
+  {
+   "id": "arctic_airbase",
+   "key": "Airbase",
+   "slug": "airbase",
+   "name": "Arctic Airbase",
+   "size_studs": 4041,
+   "heightmap": {
+    "min": 0,
+    "max": 566.8941650390625
+   },
+   "in_rotation": true,
+   "grid_cell_m": 100
+  },
+  {
+   "id": "chernobyl_v2",
+   "key": "Chernobyl",
+   "slug": "chernobyl",
+   "name": "Chernobyl",
+   "size_studs": 4125,
+   "heightmap": {
+    "min": 0,
+    "max": 408.0989990234375
+   },
+   "in_rotation": false,
+   "grid_cell_m": null
+  },
+  {
+   "id": "cloudy_valley",
+   "key": "Cloudy Valley",
+   "slug": "cloudy-valley",
+   "name": "Cloudy Valley",
+   "size_studs": 2900,
+   "heightmap": {
+    "min": 0,
+    "max": 318.92401123046875
+   },
+   "in_rotation": false,
+   "grid_cell_m": null
+  },
+  {
+   "id": "dustbowl",
+   "key": "Dustbowl",
+   "slug": "dustbowl",
+   "name": "Dustbowl",
+   "size_studs": 3442,
+   "heightmap": {
+    "min": 0,
+    "max": 362.07421875
+   },
+   "in_rotation": false,
+   "grid_cell_m": null
+  },
+  {
+   "id": "dustbowl_ii",
+   "key": "Dustbowl2",
+   "slug": "dustbowl2",
+   "name": "Dustbowl II (old)",
+   "size_studs": 6263,
+   "heightmap": {
+    "min": -55.95123291015625,
+    "max": 506
+   },
+   "in_rotation": false,
+   "grid_cell_m": null
+  },
+  {
+   "id": "dustbowl_ii_rework",
+   "key": "Dustbowl2re",
+   "slug": "dustbowl2re",
+   "name": "Dustbowl II",
+   "size_studs": 6263,
+   "heightmap": {
+    "min": 25.84375,
+    "max": 232.2118682861328
+   },
+   "in_rotation": true,
+   "grid_cell_m": 100
+  },
+  {
+   "id": "fulvia_gap",
+   "key": "Fulvia Gap",
+   "slug": "fulvia-gap",
+   "name": "Fulvia Gap",
+   "size_studs": 7992,
+   "heightmap": {
+    "min": 0,
+    "max": 168.87933349609375
+   },
+   "in_rotation": true,
+   "grid_cell_m": 100
+  },
+  {
+   "id": "gensokyo",
+   "key": "JapanMap",
+   "slug": "japanmap",
+   "name": "Gensokyo",
+   "size_studs": 3049.9999999999995,
+   "heightmap": null,
+   "in_rotation": false,
+   "grid_cell_m": null
+  },
+  {
+   "id": "japan",
+   "key": "OldJapanMap",
+   "slug": "oldjapanmap",
+   "name": "Japan",
+   "size_studs": 3049.9999999999995,
+   "heightmap": null,
+   "in_rotation": false,
+   "grid_cell_m": null
+  },
+  {
+   "id": "muddy_fields",
+   "key": "Muddy Fields",
+   "slug": "muddy-fields",
+   "name": "Muddy Fields",
+   "size_studs": 5999,
+   "heightmap": {
+    "min": 5.9947967529296875,
+    "max": 104.14280700683594
+   },
+   "in_rotation": true,
+   "grid_cell_m": 100
+  },
+  {
+   "id": "no_mans_land",
+   "key": "No Man's Land",
+   "slug": "no-mans-land",
+   "name": "No Man's Land",
+   "size_studs": 3179,
+   "heightmap": {
+    "min": 27.66015625,
+    "max": 149.8065490722656
+   },
+   "in_rotation": false,
+   "grid_cell_m": null
+  },
+  {
+   "id": "normandy",
+   "key": "Normandy Bocage",
+   "slug": "normandy-bocage",
+   "name": "Normandy Bocage",
+   "size_studs": 5976,
+   "heightmap": {
+    "min": 0,
+    "max": 116.07926940917969
+   },
+   "in_rotation": true,
+   "grid_cell_m": 100
+  },
+  {
+   "id": "powerplant",
+   "key": "PowerPlant",
+   "slug": "powerplant",
+   "name": "Powerplant",
+   "size_studs": 3995,
+   "heightmap": {
+    "min": 110.25238037109375,
+    "max": 579.076416015625
+   },
+   "in_rotation": false,
+   "grid_cell_m": null
+  },
+  {
+   "id": "radar_station",
+   "key": "Radar",
+   "slug": "radar",
+   "name": "Radar Station",
+   "size_studs": 6372,
+   "heightmap": {
+    "min": 0,
+    "max": 311.19268798828125
+   },
+   "in_rotation": false,
+   "grid_cell_m": null
+  },
+  {
+   "id": "reactor",
+   "key": "OldReactor",
+   "slug": "oldreactor",
+   "name": "Reactor (old)",
+   "size_studs": 5175,
+   "heightmap": null,
+   "in_rotation": false,
+   "grid_cell_m": null
+  },
+  {
+   "id": "rohkshort",
+   "key": "Rohkshort",
+   "slug": "rohkshort",
+   "name": "Rohkshort",
+   "size_studs": 9217,
+   "heightmap": {
+    "min": 0,
+    "max": 387.8159484863281
+   },
+   "in_rotation": true,
+   "grid_cell_m": 100
+  },
+  {
+   "id": "rohkstov",
+   "key": "Rohkstov",
+   "slug": "rohkstov",
+   "name": "Rohkstov",
+   "size_studs": 14996,
+   "heightmap": {
+    "min": 0.406219482421875,
+    "max": 488.1702880859375
+   },
+   "in_rotation": true,
+   "grid_cell_m": 200
+  },
+  {
+   "id": "roinburg",
+   "key": "Roinburg",
+   "slug": "roinburg",
+   "name": "Roinburg",
+   "size_studs": 3543,
+   "heightmap": {
+    "min": 6.165008544921875,
+    "max": 227.7537384033203
+   },
+   "in_rotation": true,
+   "grid_cell_m": 100
+  },
+  {
+   "id": "snow_tundra",
+   "key": "Snowy Tundra",
+   "slug": "snowy-tundra",
+   "name": "Snow Tundra",
+   "size_studs": 4000,
+   "heightmap": null,
+   "in_rotation": false,
+   "grid_cell_m": null
+  },
+  {
+   "id": "snowy_fields",
+   "key": "Snowy Fields",
+   "slug": "snowy-fields",
+   "name": "Snowy Fields",
+   "size_studs": 5999,
+   "heightmap": {
+    "min": 6.6523284912109375,
+    "max": 228.3592529296875
+   },
+   "in_rotation": true,
+   "grid_cell_m": 100
+  },
+  {
+   "id": "sokolovka",
+   "key": "Sokolovka",
+   "slug": "sokolovka",
+   "name": "Sokolovka",
+   "size_studs": 5004,
+   "heightmap": {
+    "min": 0,
+    "max": 96.25390625
+   },
+   "in_rotation": true,
+   "grid_cell_m": 100
+  },
+  {
+   "id": "the_map",
+   "key": "The Map",
+   "slug": "the-map",
+   "name": "The Map",
+   "size_studs": 22943,
+   "heightmap": {
+    "min": -147.68359375,
+    "max": 159.07421875
+   },
+   "in_rotation": false,
+   "grid_cell_m": null
+  },
+  {
+   "id": "villers_sommeil",
+   "key": "Villers-Sommeil",
+   "slug": "villers-sommeil",
+   "name": "Villers-Sommeil",
+   "size_studs": 2997,
+   "heightmap": {
+    "min": 19.85155487060547,
+    "max": 123.07566833496094
+   },
+   "in_rotation": true,
+   "grid_cell_m": 100
+  },
+  {
+   "id": "waterloo",
+   "key": "Waterloo",
+   "slug": "waterloo",
+   "name": "Waterloo",
+   "size_studs": 8734,
+   "heightmap": {
+    "min": 0,
+    "max": 250.58702087402344
+   },
+   "in_rotation": false,
+   "grid_cell_m": null
+  },
+  {
+   "id": "zone_11",
+   "key": "Fields",
+   "slug": "fields",
+   "name": "Zone 11",
+   "size_studs": 8107,
+   "heightmap": {
+    "min": 0,
+    "max": 347.7691345214844
+   },
+   "in_rotation": true,
+   "grid_cell_m": 100
+  }
+ ]
+}

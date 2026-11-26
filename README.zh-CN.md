@@ -1,0 +1,122 @@
+<div align="center">
+
+<img src="assets/readme/banner.zh-CN.webp" alt="MTC Calculator：Multicrew Tank Combat 火炮计算器" width="100%">
+
+<p>
+  <a href="https://github.com/Akureyri-i/mtc-calc/releases/latest"><img alt="最新版本" src="https://img.shields.io/github/v/release/Akureyri-i/mtc-calc?style=flat-square&label=release&color=E4AE47&labelColor=181E22"></a>
+  <a href="https://github.com/Akureyri-i/mtc-calc/releases"><img alt="下载量" src="https://img.shields.io/github/downloads/Akureyri-i/mtc-calc/total?style=flat-square&color=E4AE47&labelColor=181E22"></a>
+  <img alt="Windows 10 和 11" src="https://img.shields.io/badge/Windows-10%20%7C%2011-E4AE47?style=flat-square&labelColor=181E22">
+  <a href="LICENSE"><img alt="MIT 许可证" src="https://img.shields.io/badge/license-MIT-E4AE47?style=flat-square&labelColor=181E22"></a>
+</p>
+
+<a href="README.md">English</a> · <b>简体中文</b>
+
+</div>
+
+<br>
+
+在 Multicrew Tank Combat 里玩火炮时，MTC Calculator 叠在 Roblox 画面上工作。你照常在地图上标点，它算出每个目标的仰角、方位和装药，直接显示在游戏自己的读数旁边。
+
+> [!NOTE]
+> 它只看你屏幕上的画面：不读游戏内存，不往 Roblox 里注入任何东西，也不会替你按任何一个键、点任何一下鼠标。瞄准、装填、开火都由你自己来。
+
+<p align="center">
+  <img src="assets/readme/plan.webp" alt="在大地图上标点，计划面板里每个目标都出现射击方案" width="100%">
+  <br>
+  <sub>真实对局的回放：在大地图上每标一个点，就多出它的装药、飞行时间和弹道。</sub>
+</p>
+
+## 能做什么
+
+<table>
+  <tr>
+    <td width="40%" valign="top">
+      <img src="assets/readme/plan-panel.webp" alt="大地图旁边的计划面板">
+    </td>
+    <td width="60%" valign="top">
+      <h3>所有目标，一个面板</h3>
+      <p>打开大地图，计划面板就贴在旁边：每个标点和据点的距离、装药、飞行时间一目了然。选中一个，还能看到高差、方位、标点的精度、高低两条弹道，以及沿射向的地形剖面。</p>
+      <p>低弹道会被山坡或建筑挡住时，它会自动换成高弹道或别的装药。树和小房子只提示一下，因为炮弹多半能越过去。</p>
+      <br>
+      <h3>对着读数装定</h3>
+      <img src="assets/readme/gunner-hud.webp" alt="炮手面板和指示条在游戏角度读数旁边">
+      <p>坐在炮手位时，一个小面板和指示条贴在游戏的仰角、方位读数旁边，告诉你目标的角度，以及还差多少要转。</p>
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2">
+      <h3>装能打到的</h3>
+      <img src="assets/readme/loading.webp" alt="装填菜单里每档装药旁边的红绿点" width="100%">
+      <p>打开装填菜单时，每种弹的每档装药旁边都有一个点：绿点表示能打到选中的目标，红点表示打不到。面板上会直接告诉你该用哪档。</p>
+    </td>
+  </tr>
+</table>
+
+**另外**
+
+- 自己认出是哪张地图、你的炮在哪；打开一次大地图就设好了。
+- 在地图上画出预测落点，也能认出每发炮弹实际落在哪里。
+- 任何窗口大小、任何 Windows 显示缩放都能用。
+- 第一次用时自动下载地图图片、高度图和弹药数据，之后自己保持最新。
+- 占用很低：我们实测的对局里平均约 0.15 个 CPU 核心，内存不到 100 MB。
+
+## 开始使用
+
+1. 从 [Releases](https://github.com/Akureyri-i/mtc-calc/releases/latest) 下载最新版本，解压到任意位置。
+2. 打开 Roblox 进入 Multicrew Tank Combat，再运行 `mtc-hud.exe`。
+3. 坐上火炮，打开一次大地图，照常标点就行。
+
+需要 64 位的 Windows 10 或 11，以及 Roblox 桌面版。
+
+第一次启动时会问你愿不愿意分享匿名统计数据，用来把计算器调得更准。你不点同意就不会发，之后也随时可以在设置里改（面板上的齿轮）。
+
+## 隐私
+
+计算器在你自己的电脑上运行。它只看 Roblox 窗口，从不记录你打的字，日志也只存在你自己的硬盘上。打开统计数据后，发送的只是每发炮和每次运行的纯数字：没有截图，没有玩家名字，没有文件路径。问题报告在你电脑上生成，你自己不发出去，它就哪儿也不去。详细说明见 [隐私说明](PRIVACY.zh-CN.md)。
+
+## 常见问题
+
+<details>
+<summary><b>这算外挂吗？</b></summary>
+<br>
+它做的事不超过一个录屏软件：看 Roblox 窗口的画面，再在上面画自己的窗口。Roblox 里的任何东西都不读取、不修改、不自动操作，每一发炮仍然是你自己瞄准、装填、开火。
+</details>
+
+<details>
+<summary><b>支持哪些炮？</b></summary>
+<br>
+游戏数据里标为火炮的武器都支持：自行火炮、牵引炮、迫击炮和火箭炮。M109、M109A6、2S33、D-30、Centurion AVRE 和 60 mm 迫击炮的出膛位置在游戏里实测过，其余的借用最接近的那一门。
+</details>
+
+<details>
+<summary><b>我的屏幕不是 2K，能用吗？</b></summary>
+<br>
+能。它会按窗口大小和 Windows 缩放自己适配；我们平时在 2560×1440、150% 缩放下玩，也在 1920×1080、100% 下完整打过一局。
+</details>
+
+<details>
+<summary><b>出问题了怎么反馈？</b></summary>
+<br>
+打开设置，在“Problem report”下点“Create report”，把打开的文件夹附到 GitHub Issue 里。如果问题是看得见的，勾上“Screenshots”；截图里的玩家名字会被涂黑。
+</details>
+
+## 从源码构建
+
+需要 Windows 和较新的稳定版 Rust（edition 2024）。
+
+```powershell
+cargo build --release
+cargo test --release
+```
+
+需要游戏录像的测试在本机没有录像时会自动跳过。
+
+## 致谢
+
+- grand-hawk 的 [artillery-calculator](https://github.com/grand-hawk/artillery-calculator)（MIT）：本项目最初的弹道模型和地图配置来自它，地图图片和高度图也由它的地图服务提供。
+- [MTC wiki](https://multicrew.wiki) 的数据服务：武器和弹药数据。
+- [Montserrat](https://github.com/JulietaUla/Montserrat) 字体（SIL Open Font License）：游戏界面用的字体，我们用它读游戏里的字，也用它画自己的界面。
+
+Multicrew Tank Combat 和 Roblox 归各自的所有者。本项目是玩家自制的工具，与 Roblox 公司及游戏开发方没有关联。
+
+本项目以 [MIT 许可证](LICENSE) 发布。

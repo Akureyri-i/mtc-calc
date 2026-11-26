@@ -1,0 +1,10 @@
+# Build output
+/target/
+# Recorded gameplay for the dataset tests stays on your machine
+/datasets/
+# Temporary output of the development examples
+/scratch/
+# Cloudflare tool cache
+.wrangler/
+__pycache__/
+*.log
