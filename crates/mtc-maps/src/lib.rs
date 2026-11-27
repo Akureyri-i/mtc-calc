@@ -158,6 +158,9 @@ pub fn heightmap_path(map: &MapInfo) -> PathBuf {
 
 /// The official map service (the upstream calculator's image host) and its file names.
 const MAP_SERVICE: &str = "https://maps.artillery-calculator.com";
+/// The map service's pictures and heightmaps copied to the calculator's data host (same layout;
+/// files over the host's size limit are not there). Downloads try both at once.
+const MAP_MIRROR: &str = "https://data.mtc-calc.dev/maps/v1";
 pub const REFERENCE_FILE: &str = "user.png";
 pub const HEIGHTMAP_FILE: &str = "heightmap.png";
 /// The heightmap's red channel, made from `HEIGHTMAP_FILE` on first load: `RAW_MAGIC`, width and
@@ -194,24 +197,72 @@ fn tiled_len(width: usize, height: usize) -> usize {
     RAW_HEADER + width.div_ceil(TILE) * height.div_ceil(TILE) * TILE_BYTES
 }
 
-/// Downloads `file` (`REFERENCE_FILE`, `HEIGHTMAP_FILE`) of `map` from the map service into the
-/// cache, replacing the cached copy only once the whole file arrived.
+/// Downloads `file` (`REFERENCE_FILE`, `HEIGHTMAP_FILE`) of `map` into the cache, from the map
+/// service and its copy on the calculator's data host at once: the first whole PNG is kept, the
+/// other download stops. The cached copy is replaced only once a whole file arrived.
 pub fn download(map: &MapInfo, file: &str) -> io::Result<PathBuf> {
-    let url = format!("{MAP_SERVICE}/{}/{file}", map.slug);
-    // A stalled connection gives up instead of holding the library back for the session.
-    let agent = ureq::AgentBuilder::new().timeout_connect(Duration::from_secs(15)).timeout_read(Duration::from_secs(30)).build();
-    let response = agent.get(&url).call().map_err(io::Error::other)?;
-    let mut bytes = Vec::new();
-    response.into_reader().take(64 << 20).read_to_end(&mut bytes)?;
-    if !bytes.starts_with(b"\x89PNG") {
-        return Err(io::Error::other(format!("{url}: not a PNG")));
-    }
+    let bytes = download_first(&[MAP_MIRROR, MAP_SERVICE].map(|host| format!("{host}/{}/{file}", map.slug)))?;
     let path = cache_dir().join(&map.slug).join(file);
     std::fs::create_dir_all(path.parent().expect("cache folder"))?;
     let partial = path.with_extension("part");
     std::fs::write(&partial, &bytes)?;
     std::fs::rename(&partial, &path)?;
     Ok(path)
+}
+
+/// The first of `urls` to deliver a whole PNG, all fetched at once; the rest stop at their next
+/// read once one has it. The error names every URL's failure.
+fn download_first(urls: &[String]) -> io::Result<Vec<u8>> {
+    let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (tx, rx) = std::sync::mpsc::channel();
+    for url in urls {
+        let (url, done, tx) = (url.clone(), done.clone(), tx.clone());
+        std::thread::Builder::new()
+            .name("map-download".into())
+            .spawn(move || {
+                let _ = tx.send(fetch_png(&url, &done).map_err(|e| format!("{url}: {e}")));
+            })
+            .map_err(io::Error::other)?;
+    }
+    drop(tx);
+    let mut errors = Vec::new();
+    for result in rx {
+        match result {
+            Ok(bytes) => {
+                done.store(true, std::sync::atomic::Ordering::Relaxed);
+                return Ok(bytes);
+            }
+            Err(e) => errors.push(e),
+        }
+    }
+    Err(io::Error::other(errors.join("; ")))
+}
+
+/// One whole PNG from `url`, read in chunks so it can give up once `done` is set (another host
+/// delivered first).
+fn fetch_png(url: &str, done: &std::sync::atomic::AtomicBool) -> io::Result<Vec<u8>> {
+    // A stalled connection gives up instead of holding the library back for the session.
+    let agent = ureq::AgentBuilder::new().timeout_connect(Duration::from_secs(15)).timeout_read(Duration::from_secs(30)).build();
+    let response = agent.get(url).call().map_err(io::Error::other)?;
+    let expected: Option<usize> = response.header("Content-Length").and_then(|v| v.parse().ok());
+    let mut reader = response.into_reader().take(64 << 20);
+    let (mut bytes, mut chunk) = (Vec::new(), vec![0u8; 64 << 10]);
+    loop {
+        if done.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(io::Error::other("another host delivered it first"));
+        }
+        match reader.read(&mut chunk)? {
+            0 => break,
+            n => bytes.extend_from_slice(&chunk[..n]),
+        }
+    }
+    if expected.is_some_and(|n| n != bytes.len()) {
+        return Err(io::Error::other(format!("cut short: {} of {} bytes", bytes.len(), expected.unwrap_or(0))));
+    }
+    if !bytes.starts_with(b"\x89PNG") {
+        return Err(io::Error::other("not a PNG"));
+    }
+    Ok(bytes)
 }
 
 /// A map's heightmap: the file's red channel at full resolution, mapped from the raw copy.

@@ -268,9 +268,12 @@ fn bright_ground(p: [u8; 3]) -> bool {
     p[0].min(p[1]).min(p[2]) >= BRIGHT_GROUND
 }
 
+/// A pixel of the action-bar colour's fill (the selected charge row, the loaded slot's header):
+/// amber, about (228, 176, 72). Bright and warm rather than a narrow band of levels, so a picture
+/// made brighter still counts: Windows HDR captured as 8 bits lifts it to (255, 255, 106).
 fn is_selected_fill(p: [u8; 3]) -> bool {
-    let [r, g, b] = p;
-    r > 200 && (150..215).contains(&g) && b < 110
+    let (r, g, b) = (i32::from(p[0]), i32::from(p[1]), i32::from(p[2]));
+    r > 200 && g >= 150 && b < 130 && r + g - 2 * b >= 220 && r >= g - 8
 }
 
 /// Countdown bar pixel: neutral (black, grey, white), green (r = b) or red and cyan (g = b) fill.

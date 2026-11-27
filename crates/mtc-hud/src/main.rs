@@ -2102,17 +2102,44 @@ fn main() {
     let mut waiting_said = false;
     // Starts that failed in a row, and the last error (logged when it changes).
     let (mut failures, mut last_error, mut told) = (0u32, String::new(), false);
+    // Windows titled like Roblox but not taken for it (logged when they change), the window last
+    // checked for administrator rights and the display, and whether the player was told Roblox
+    // runs as administrator.
+    let (mut lookalikes, mut checked, mut told_admin) = (Vec::new(), None, false);
     while !stop.load(Ordering::SeqCst) {
         let Some(window) = find_roblox() else {
             if !waiting_said {
                 log::info!("Waiting for the Roblox window...");
                 waiting_said = true;
             }
+            let seen = mtc_capture::window::roblox_lookalikes();
+            if seen != lookalikes {
+                if !seen.is_empty() {
+                    log::info!("Windows titled like Roblox, not taken for the player: {}", seen.join(", "));
+                }
+                lookalikes = seen;
+            }
             std::thread::sleep(Duration::from_secs(2));
             continue;
         };
         waiting_said = false;
         roblox_handle.store(window.as_raw_hwnd() as isize, Ordering::Relaxed);
+        if checked != Some(window.as_raw_hwnd() as isize) {
+            checked = Some(window.as_raw_hwnd() as isize);
+            let hwnd = windows::Win32::Foundation::HWND(window.as_raw_hwnd());
+            match mtc_capture::window::display_hdr(hwnd) {
+                Some((true, nits)) => log::info!("The game's display has HDR on: ordinary content at {nits:.0} nits, so captured colours come out {:.2} times brighter", nits / 80.0),
+                Some((false, _)) => log::info!("The game's display has HDR off"),
+                None => log::info!("The game's display: HDR state unknown"),
+            }
+            if window.process_id().is_ok_and(mtc_capture::window::elevated_above_this) {
+                log::warn!("Roblox runs as administrator and the calculator does not");
+                if !told_admin {
+                    told_admin = true;
+                    tell_roblox_elevated();
+                }
+            }
+        }
         let settings = Settings::new(
             window,
             support.cursor(),
@@ -2217,6 +2244,22 @@ impl CaptureSupport {
         .map(|(_, kept)| kept)
         .collect()
     }
+}
+
+/// Tells the player once that Roblox runs as administrator and the calculator does not, which
+/// can keep it from seeing the keys pressed in the game. On its own thread.
+fn tell_roblox_elevated() {
+    use windows::Win32::UI::WindowsAndMessaging::{MB_ICONWARNING, MB_OK, MessageBoxW};
+    std::thread::spawn(|| {
+        unsafe {
+            MessageBoxW(
+                None,
+                windows::core::w!("Roblox is running as administrator, so MTC Calculator may not see the keys you press in it.\n\nQuit the calculator (right-click its icon in the notification area, Quit) and start it again with right-click, Run as administrator."),
+                windows::core::w!("MTC Calculator"),
+                MB_OK | MB_ICONWARNING,
+            )
+        };
+    });
 }
 
 /// Tells the player once that nothing can show in the game: the capture keeps failing to start.

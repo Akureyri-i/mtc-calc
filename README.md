@@ -67,7 +67,7 @@ MTC Calculator sits on top of Roblox while you crew the artillery in [Multicrew 
 
 - Recognises the map and your gun's position by itself; open the full map once and it is set.
 - Draws the predicted landing point on the map, and spots where each shell actually lands.
-- Works at any window size and Windows display scaling.
+- Adapts to the window size and the Windows display scaling: tried from 100 % to 225 % (see the questions below).
 - Downloads map pictures, heightmaps and ammunition data on first use and keeps them up to date.
 - Light on your PC: 0.15 to 0.3 of one CPU core and 100 to 200 MB of memory in the matches we measured.
 
@@ -80,6 +80,13 @@ MTC Calculator sits on top of Roblox while you crew the artillery in [Multicrew 
 It has no window of its own: look for its icon in the notification area at the bottom right of the screen. Right-click it to open the log folder or quit.
 
 Needs 64-bit Windows 10 or 11 and the Roblox desktop app.
+
+The calculator reads the game as it looks out of the box, so:
+
+- In the game's settings, set the GUNNER section to: Align action bar Center, Action bar color #F0B74A, Hide minimap when aiming OFF, Weapon selection layout Horizontal, Keep action bar expanded while loading ON.
+- Turn off Roblox's automatic translation and keep the game in English.
+- Don't use a font pack that replaces the game's fonts.
+- If Roblox runs as administrator, run the calculator as administrator too.
 
 On first start it asks whether you want to share anonymous statistics that help tune the calculator. It is off unless you say yes, and you can change it any time in the settings (the gear on the panel).
 
@@ -104,7 +111,7 @@ Every weapon the game's data marks as artillery: self-propelled and towed guns, 
 <details>
 <summary><b>My screen is not 1440p. Does it still work?</b></summary>
 <br>
-Yes. It adapts to the window size and the Windows scaling setting; we play it on a 2560×1440 screen at 150 % and tested a full match at 1920×1080 at 100 %.
+Usually. It adapts to the window size and the Windows scaling setting: we play it on a 2560×1440 screen at 150 %, played a full match at 1920×1080 at 100 %, and tried 175 %, 200 % and 225 % on the 2560×1440 screen. Other screens and scalings have not each been tested; if something isn't recognised, make a report with Problem report under the panel's gear and send it to us.
 </details>
 
 <details>

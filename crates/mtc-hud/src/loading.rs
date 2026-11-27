@@ -54,6 +54,45 @@ const WEAPON_RECHECK_MS: u64 = 2_000;
 const WEAPON_SEARCH_MS: u64 = 500;
 /// Another weapon's label read this many times in a row is another weapon.
 const LABEL_SWITCH_READS: u32 = 2;
+/// Weapon names read as no weapon's label at all (not "<calibre> mm <name>") before the player is
+/// told the game's text cannot be read, while no weapon was ever decided this run.
+const UNREADABLE_LABELS_TOLD: u32 = 10;
+
+/// Counts a weapon name read that is not shaped like one ("1 o5 nn Y113o" under a font pack) and
+/// tells the player once when they keep coming with no weapon decided: the calculator reads the
+/// game's own font.
+fn note_unreadable_label(label: &str, weapon_known: bool) {
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+    static COUNT: AtomicU32 = AtomicU32::new(0);
+    static TOLD: AtomicBool = AtomicBool::new(false);
+    if weapon_known || shaped_like_weapon_label(label) {
+        return;
+    }
+    if COUNT.fetch_add(1, Ordering::Relaxed) + 1 < UNREADABLE_LABELS_TOLD || TOLD.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    log::warn!("The weapon name keeps reading as no weapon (last \"{label}\"): the game's text is not in the font the calculator reads (font pack?)");
+    std::thread::spawn(|| {
+        use windows::Win32::UI::WindowsAndMessaging::{MB_ICONWARNING, MB_OK, MessageBoxW};
+        unsafe {
+            MessageBoxW(
+                None,
+                windows::core::w!("MTC Calculator cannot read the game's text, so it cannot tell which gun you are on.
+
+It reads the game's own font and English text only: remove any font pack (custom fonts) and turn off Roblox's automatic translation, then restart Roblox."),
+                windows::core::w!("MTC Calculator"),
+                MB_OK | MB_ICONWARNING,
+            )
+        };
+    });
+}
+
+/// Whether `label` looks like a weapon name: a calibre in mm, then a name ("155 mm M185").
+fn shaped_like_weapon_label(label: &str) -> bool {
+    let mut words = label.split_whitespace();
+    let calibre = words.next().is_some_and(|w| !w.is_empty() && w.chars().all(|c| c.is_ascii_digit() || c == '.'));
+    calibre && words.next() == Some("mm") && words.next().is_some()
+}
 /// A hidden countdown counts as run out this long (ms) after its predicted end.
 const RAN_OUT_MARGIN_MS: u64 = 500;
 /// A new loaded slot or charge on the gunner's bar is taken after this many reads in a row.
@@ -1103,6 +1142,7 @@ impl LoadingPipeline {
             if !label.contains('?') {
                 crate::diag::note(crate::diag::Event::UnknownLabel(label.clone()));
             }
+            note_unreadable_label(label, self.weapon.is_some());
             return;
         };
         if self.weapon.as_deref() != Some(weapon) {
@@ -1241,6 +1281,18 @@ impl LoadingPipeline {
 
 #[cfg(test)]
 mod tests {
+    /// Weapon names in the game's font have a calibre in mm; what a font pack's glyphs read as
+    /// does not.
+    #[test]
+    fn weapon_label_shape() {
+        for label in ["155 mm M185", "152.4 mm 2A64", "120 mm Rh120 L/44"] {
+            assert!(super::shaped_like_weapon_label(label), "{label}");
+        }
+        for label in ["1 o5 nn Y113o", "tJ", "ELuATr", "h(ULUlVUU jUFfVLdD", "155 mm"] {
+            assert!(!super::shaped_like_weapon_label(label), "{label}");
+        }
+    }
+
     use super::*;
 
     #[test]

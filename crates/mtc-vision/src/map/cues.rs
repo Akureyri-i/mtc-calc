@@ -33,6 +33,10 @@ const MIN_SPREAD_SHARE: f32 = 0.1;
 /// text drawn at stepped font sizes (the Ping icon was found up to 2.9 px from its rule), and the
 /// minimap's M box sits 1-2 px off its container's scale where that is held to 0.32 H.
 const SEARCH_ELSEWHERE: i32 = 4;
+/// Sideways search for the Ping icon off the reference: above 150 % scaling the hint row's text
+/// steps put it further left than its rule, 3, 7 and 13 px at 175, 200 and 225 % on a 2560 x 1440
+/// screen.
+const PING_SEARCH_X_ELSEWHERE: i32 = 16;
 const PING_MIN_SCORE: f32 = 0.5;
 const M_KEY_MIN_SCORE: f32 = 0.5;
 /// Off the reference the M is text drawn at the configuration's stepped size: on recorded gameplay
@@ -77,6 +81,8 @@ struct CueTemplate {
     x: i32,
     y: i32,
     search: i32,
+    /// Sideways search (px), `search` unless widened.
+    search_x: i32,
     width: i32,
     height: i32,
     /// Mean-removed template values at masked pixels, with their offsets.
@@ -135,14 +141,14 @@ impl CueTemplate {
         let mean = raw.iter().map(|p| p.2).sum::<f32>() / raw.len() as f32;
         let points: Vec<_> = raw.into_iter().map(|(x, y, v)| (x, y, v - mean)).collect();
         let norm = points.iter().map(|p| p.2 * p.2).sum::<f32>().sqrt();
-        Self { x: at.0, y: at.1, search, width: w as i32, height: h as i32, points, norm }
+        Self { x: at.0, y: at.1, search, search_x: search, width: w as i32, height: h as i32, points, norm }
     }
 
     fn region(&self, client_origin: (i32, i32)) -> (i32, i32, i32, i32) {
         (
-            self.x + client_origin.0 - self.search,
+            self.x + client_origin.0 - self.search_x,
             self.y + client_origin.1 - self.search,
-            self.width + 2 * self.search,
+            self.width + 2 * self.search_x,
             self.height + 2 * self.search,
         )
     }
@@ -169,7 +175,7 @@ impl CueTemplate {
         let min_var = ((min_share * self.spread()).powi(2) * n).max(1.0);
         let (mut best, mut best_spread) = (f32::MIN, 0.0f32);
         for dy in -self.search..=self.search {
-            for dx in -self.search..=self.search {
+            for dx in -self.search_x..=self.search_x {
                 let (ox, oy) = (self.x + client_origin.0 + dx, self.y + client_origin.1 + dy);
                 let (mut sum, mut sum_sq, mut cross) = (0.0f32, 0.0f32, 0.0f32);
                 for &(px, py, t) in &self.points {
@@ -188,6 +194,38 @@ impl CueTemplate {
             }
         }
         (best, best_spread)
+    }
+
+    /// Development: the best masked NCC within ±`radius` px of the nominal position and its
+    /// offset from it, over windows with the usual spread floor.
+    fn best_within(&self, views: &[FrameView], client_origin: (i32, i32), radius: i32) -> (f32, i32, i32) {
+        let (x, y) = (self.x + client_origin.0 - radius, self.y + client_origin.1 - radius);
+        let Some(view) = views.iter().find(|v| v.covers(x, y, self.width + 2 * radius, self.height + 2 * radius)) else {
+            return (0.0, 0, 0);
+        };
+        let n = self.points.len() as f32;
+        let min_var = ((MIN_SPREAD_SHARE * self.spread()).powi(2) * n).max(1.0);
+        let mut best = (f32::MIN, 0, 0);
+        for dy in -radius..=radius {
+            for dx in -radius..=radius {
+                let (ox, oy) = (self.x + client_origin.0 + dx, self.y + client_origin.1 + dy);
+                let (mut sum, mut sum_sq, mut cross) = (0.0f32, 0.0f32, 0.0f32);
+                for &(px, py, t) in &self.points {
+                    let v = view.luma(ox + px, oy + py);
+                    sum += v;
+                    sum_sq += v * v;
+                    cross += v * t;
+                }
+                let var = sum_sq - sum * sum / n;
+                if var > min_var {
+                    let score = cross / (var.sqrt() * self.norm);
+                    if score > best.0 {
+                        best = (score, dx, dy);
+                    }
+                }
+            }
+        }
+        best
     }
 }
 
@@ -304,7 +342,8 @@ impl CueReader {
         let (w, h) = (f64::from(layout.width), f64::from(layout.height));
         let (fl, ft, fs) = placement.map_container(MapView::Full);
         let (right, bottom) = (fl + fs, ft + fs);
-        let ping = CueTemplate::scaled(&file.ping, (right - (331.5 - 11.0 * d) * s, bottom + 11.0 * s), s);
+        let mut ping = CueTemplate::scaled(&file.ping, (right - (331.5 - 11.0 * d) * s, bottom + 11.0 * s), s);
+        ping.search_x = PING_SEARCH_X_ELSEWHERE;
         let hint_at = |a: &CueAsset| (right - 9.0 * s - f64::from(a.width) * s, bottom + 15.0 * s);
         let hint_add = CueTemplate::scaled(&file.hint_add, hint_at(&file.hint_add), s);
         let hint_remove = CueTemplate::scaled(&file.hint_remove, hint_at(&file.hint_remove), s);
@@ -356,6 +395,12 @@ impl CueReader {
     pub fn ping_detail(&self, views: &[FrameView], client_origin: (i32, i32)) -> (f32, f32, f32) {
         let (score, spread) = self.ping.score_detail(views, client_origin, 0.0);
         (score, spread, self.ping.spread())
+    }
+
+    /// Development: the Ping icon's and the M box's best score within ±`radius` px of where the
+    /// layout puts them, each with its offset (x, y) from there.
+    pub fn cue_offsets(&self, views: &[FrameView], client_origin: (i32, i32), radius: i32) -> [(f32, i32, i32); 2] {
+        [self.ping.best_within(views, client_origin, radius), self.m_key.best_within(views, client_origin, radius)]
     }
 
     /// Development: as `ping_detail`, for the minimap's M box.

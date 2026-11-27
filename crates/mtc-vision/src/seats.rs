@@ -345,6 +345,11 @@ impl SeatReader {
     /// vehicle). `client` is the client rectangle in frame px; the view covers `region(client)`.
     pub fn read(&self, view: &FrameView, client: (i32, i32, u32, u32)) -> Option<SeatMenu> {
         let (rx, ry, rw, rh) = Self::region(client);
+        // The client and the frame disagree for a frame or two while the display configuration
+        // changes (the region already follows the new one): nothing to read then.
+        if !view.covers(rx, ry, rw as i32, rh as i32) {
+            return None;
+        }
         let gray = gray_of(view, rx, ry, rw as usize, rh as usize);
         let coarse = gray.reduced();
 
@@ -608,4 +613,19 @@ fn name_score(view: &FrameView, center: (f32, f32), scale: f32, own: &OwnName) -
         }
     }
     best
+}
+
+#[cfg(test)]
+mod region_tests {
+    use super::*;
+
+    /// A client rectangle reaching past the frame (the display configuration changing) reads
+    /// nothing instead of indexing past the pixels.
+    #[test]
+    fn a_region_past_the_frame_reads_nothing() {
+        let (w, h) = (1280u32, 720u32);
+        let data = vec![0u8; (w * h * 3) as usize];
+        let view = FrameView::rgb(&data, w, h);
+        assert!(SeatReader::new().read(&view, (0, 34, 1280, 1316)).is_none());
+    }
 }

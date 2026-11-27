@@ -494,19 +494,20 @@ fn load_library(slot: &Mutex<Option<Library>>, pace: bool) -> Vec<&'static MapIn
     let mut identifier = MapIdentifier::new(&[]);
     let missing = mtc_maps::all().iter().filter(|m| !mtc_maps::reference_path(m).is_file()).count();
     if missing > 0 {
-        log::info!("Map pictures: {missing} missing from the cache, downloading from the map service");
+        log::info!("Map pictures: {missing} missing from the cache, downloading from the map service and its copy");
     }
     let mut fetched = 0;
     let mut to_make: Vec<(usize, &'static MapInfo, u64)> = Vec::new();
     let mut keys = Vec::new();
+    let mut downloads = fetch_missing_references().into_iter();
     for info in mtc_maps::all() {
-        match mtc_maps::ensure_reference(info) {
-            Ok(true) => {
+        match downloads.next().flatten() {
+            Some(Ok(true)) => {
                 fetched += 1;
                 log::info!("  downloaded {} ({fetched}/{missing})", info.id);
             }
-            Ok(false) => {}
-            Err(e) => log::warn!("  {} could not be downloaded: {e}", info.id),
+            Some(Ok(false)) | None => {}
+            Some(Err(e)) => log::warn!("  {} could not be downloaded: {e}", info.id),
         }
         let key = match std::fs::read(mtc_maps::reference_path(info)) {
             Ok(bytes) => mtc_maps::content_hash(&bytes),
@@ -553,6 +554,32 @@ fn load_library(slot: &Mutex<Option<Library>>, pace: bool) -> Vec<&'static MapIn
     }
     log::info!("Made {} missing thumbnails ({:.1} s), saved to the cache", to_make.len(), making.elapsed().as_secs_f64());
     absent
+}
+
+/// Map pictures downloaded at once on a first start (each from both hosts, `mtc_maps::download`).
+const PARALLEL_DOWNLOADS: usize = 4;
+
+/// Downloads the pictures the cache lacks, `PARALLEL_DOWNLOADS` at a time: one by one a slow
+/// connection held the library back for minutes. One result per map of `mtc_maps::all`, `None`
+/// where the cache had it.
+fn fetch_missing_references() -> Vec<Option<std::io::Result<bool>>> {
+    let maps = mtc_maps::all();
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let results: Vec<Mutex<Option<std::io::Result<bool>>>> = maps.iter().map(|_| Mutex::new(None)).collect();
+    std::thread::scope(|scope| {
+        for _ in 0..PARALLEL_DOWNLOADS {
+            scope.spawn(|| {
+                loop {
+                    let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let Some(info) = maps.get(i) else { break };
+                    if !mtc_maps::reference_path(info).is_file() {
+                        *results[i].lock().expect("download result") = Some(mtc_maps::ensure_reference(info));
+                    }
+                }
+            });
+        }
+    });
+    results.into_iter().map(|r| r.into_inner().expect("download result")).collect()
 }
 
 /// The live reference library, loaded on a thread once per run: a capture started again (after
