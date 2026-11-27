@@ -22,7 +22,8 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let dir = std::path::PathBuf::from(&args[0]);
     std::fs::create_dir_all(&dir).expect("out dir");
-    let fonts = roblox_font_dir();
+    // `MTC_FONT_DIR`: another font folder (an empty one: the renderer's Segoe UI fallback).
+    let fonts = std::env::var_os("MTC_FONT_DIR").map_or_else(roblox_font_dir, std::path::PathBuf::from);
     for spec in &args[1..] {
         // `dpi,width,height[:weapon,name,value]`: the text px from the table, or as given.
         let (config, px) = spec.split_once(':').map_or((spec.as_str(), None), |(c, p)| (c, Some(p)));

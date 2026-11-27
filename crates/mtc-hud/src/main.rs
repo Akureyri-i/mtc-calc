@@ -8,6 +8,7 @@
 // Release builds have no console window: the output goes to the log file.
 #![cfg_attr(feature = "gui", windows_subsystem = "windows")]
 
+mod bundle;
 mod diag;
 mod fire;
 mod game_ref;
@@ -1679,16 +1680,48 @@ fn parse_manual() -> Option<(f64, f64)> {
     Some((e.trim().parse().ok()?, a.trim().parse().ok()?))
 }
 
+/// The game's font folder (Montserrat, Titillium Web), which the HUD draws in and makes its text
+/// templates from: next to the running Roblox when there is one, else the newest Roblox install
+/// among the places installers and launchers put it, else the copy the program carries. Without it
+/// the renderer falls back to Segoe UI, whose templates do not read the game's text.
 fn roblox_font_dir() -> std::path::PathBuf {
-    let versions = std::path::PathBuf::from(std::env::var("LOCALAPPDATA").unwrap_or_default()).join("Roblox/Versions");
-    std::fs::read_dir(versions)
-        .into_iter()
-        .flatten()
-        .filter_map(Result::ok)
-        .map(|e| e.path().join("content/fonts"))
-        .filter(|p| p.join("Montserrat-Medium.ttf").is_file())
-        .max_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok())
-        .unwrap_or_default()
+    let has_fonts = |dir: &std::path::Path| dir.join("Montserrat-Medium.ttf").is_file();
+    let running = mtc_capture::window::find_roblox()
+        .and_then(|w| w.process_id().ok())
+        .and_then(|pid| mtc_capture::window::process_image_path(pid).ok())
+        .and_then(|exe| exe.parent().map(|d| d.join("content").join("fonts")))
+        .filter(|d| has_fonts(d));
+    let installed = || {
+        let env = |name: &str| std::env::var_os(name).map(std::path::PathBuf::from);
+        let roots = [
+            env("LOCALAPPDATA").map(|d| d.join("Roblox")),
+            env("ProgramFiles(x86)").map(|d| d.join("Roblox")),
+            env("ProgramFiles").map(|d| d.join("Roblox")),
+            env("LOCALAPPDATA").map(|d| d.join("Bloxstrap")),
+            env("LOCALAPPDATA").map(|d| d.join("Fishstrap")),
+        ];
+        roots
+            .into_iter()
+            .flatten()
+            .filter_map(|root| std::fs::read_dir(root.join("Versions")).ok())
+            .flatten()
+            .filter_map(Result::ok)
+            .map(|e| e.path().join("content").join("fonts"))
+            .filter(|d| has_fonts(d))
+            .max_by_key(|d| std::fs::metadata(d.join("Montserrat-Medium.ttf")).and_then(|m| m.modified()).ok())
+    };
+    // The copy the program carries (`bundle`): the game's own when it cannot be found.
+    let carried = || crate::bundle::font_dir().filter(|d| has_fonts(d));
+    match running.or_else(installed).or_else(carried) {
+        Some(dir) => {
+            log::info!("Game fonts: {}", dir.display());
+            dir
+        }
+        None => {
+            log::warn!("Game fonts (Montserrat) not found next to Roblox, in its install folders or in the program's own copy: the HUD draws in Segoe UI and the weapon names and shell cards are not read");
+            std::path::PathBuf::new()
+        }
+    }
 }
 
 /// The V1 plan panel's top-left (screen px; `offset` turns frame into screen px) and scale: docked
@@ -2039,6 +2072,8 @@ fn main() {
         log::info!("Another copy is already running; this one ends");
         return;
     }
+    // Before anything reads the map cache or the fonts.
+    bundle::unpack();
     let stop = Arc::new(AtomicBool::new(false));
     {
         let stop = stop.clone();
@@ -2102,10 +2137,9 @@ fn main() {
     let mut waiting_said = false;
     // Starts that failed in a row, and the last error (logged when it changes).
     let (mut failures, mut last_error, mut told) = (0u32, String::new(), false);
-    // Windows titled like Roblox but not taken for it (logged when they change), the window last
-    // checked for administrator rights and the display, and whether the player was told Roblox
-    // runs as administrator.
-    let (mut lookalikes, mut checked, mut told_admin) = (Vec::new(), None, false);
+    // Windows titled like Roblox but not taken for it (logged when they change), and the window
+    // last checked for administrator rights and the display.
+    let (mut lookalikes, mut checked) = (Vec::new(), None);
     while !stop.load(Ordering::SeqCst) {
         let Some(window) = find_roblox() else {
             if !waiting_said {
@@ -2132,12 +2166,10 @@ fn main() {
                 Some((false, _)) => log::info!("The game's display has HDR off"),
                 None => log::info!("The game's display: HDR state unknown"),
             }
+            // Only logged: the check (the token can't be opened from here) is not confirmed on a
+            // machine with Roblox elevated.
             if window.process_id().is_ok_and(mtc_capture::window::elevated_above_this) {
-                log::warn!("Roblox runs as administrator and the calculator does not");
-                if !told_admin {
-                    told_admin = true;
-                    tell_roblox_elevated();
-                }
+                log::warn!("Roblox seems to run as administrator and the calculator does not");
             }
         }
         let settings = Settings::new(
@@ -2244,22 +2276,6 @@ impl CaptureSupport {
         .map(|(_, kept)| kept)
         .collect()
     }
-}
-
-/// Tells the player once that Roblox runs as administrator and the calculator does not, which
-/// can keep it from seeing the keys pressed in the game. On its own thread.
-fn tell_roblox_elevated() {
-    use windows::Win32::UI::WindowsAndMessaging::{MB_ICONWARNING, MB_OK, MessageBoxW};
-    std::thread::spawn(|| {
-        unsafe {
-            MessageBoxW(
-                None,
-                windows::core::w!("Roblox is running as administrator, so MTC Calculator may not see the keys you press in it.\n\nQuit the calculator (right-click its icon in the notification area, Quit) and start it again with right-click, Run as administrator."),
-                windows::core::w!("MTC Calculator"),
-                MB_OK | MB_ICONWARNING,
-            )
-        };
-    });
 }
 
 /// Tells the player once that nothing can show in the game: the capture keeps failing to start.

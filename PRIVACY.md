@@ -28,7 +28,8 @@ notification area.
 On first use, and later to check for updates, the calculator downloads:
 
 - map pictures and heightmaps from `maps.artillery-calculator.com`, the map service of the original
-  artillery calculator;
+  artillery calculator, and its copy on `data.mtc-calc.dev`, only for files missing on your computer
+  (the program comes with them);
 - weapon and ammunition data from `data.multicrew.wiki`, the MTC wiki's data service;
 - terrain layers from `data.mtc-calc.dev`, run by this project.
 

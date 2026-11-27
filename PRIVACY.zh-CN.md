@@ -18,7 +18,7 @@
 
 第一次使用时，以及之后检查更新时，计算器会下载：
 
-- 地图图片和高度图，来自 `maps.artillery-calculator.com`（原版火炮计算器的地图服务）；
+- 地图图片和高度图，来自 `maps.artillery-calculator.com`（原版火炮计算器的地图服务）和它在 `data.mtc-calc.dev` 的副本，只在你电脑上缺这些文件时才下（程序自带一份）；
 - 武器和弹药数据，来自 `data.multicrew.wiki`（MTC wiki 的数据服务）；
 - 地形层，来自 `data.mtc-calc.dev`（本项目自己的服务）。
 

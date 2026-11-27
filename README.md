@@ -68,7 +68,7 @@ MTC Calculator sits on top of Roblox while you crew the artillery in [Multicrew 
 - Recognises the map and your gun's position by itself; open the full map once and it is set.
 - Draws the predicted landing point on the map, and spots where each shell actually lands.
 - Adapts to the window size and the Windows display scaling: tried from 100 % to 225 % (see the questions below).
-- Downloads map pictures, heightmaps and ammunition data on first use and keeps them up to date.
+- Comes with every map's pictures and heightmaps; downloads ammunition data on first use and keeps it up to date.
 - Light on your PC: 0.15 to 0.3 of one CPU core and 100 to 200 MB of memory in the matches we measured.
 
 ## Getting started
@@ -85,7 +85,7 @@ The calculator reads the game as it looks out of the box, so:
 
 - In the game's settings, set the GUNNER section to: Align action bar Center, Action bar color #F0B74A, Hide minimap when aiming OFF, Weapon selection layout Horizontal, Keep action bar expanded while loading ON.
 - Turn off Roblox's automatic translation and keep the game in English.
-- Don't use a font pack that replaces the game's fonts.
+- Don't use a font pack that replaces the game's fonts, and leave Text Size in Roblox's settings at its default.
 - If Roblox runs as administrator, run the calculator as administrator too.
 
 On first start it asks whether you want to share anonymous statistics that help tune the calculator. It is off unless you say yes, and you can change it any time in the settings (the gear on the panel).

@@ -54,37 +54,24 @@ const WEAPON_RECHECK_MS: u64 = 2_000;
 const WEAPON_SEARCH_MS: u64 = 500;
 /// Another weapon's label read this many times in a row is another weapon.
 const LABEL_SWITCH_READS: u32 = 2;
-/// Weapon names read as no weapon's label at all (not "<calibre> mm <name>") before the player is
-/// told the game's text cannot be read, while no weapon was ever decided this run.
-const UNREADABLE_LABELS_TOLD: u32 = 10;
+/// Weapon names read as no weapon's label at all (not "<calibre> mm <name>") before the log says
+/// so once, while no weapon was ever decided this run.
+const UNREADABLE_LABELS_LOGGED: u32 = 10;
 
-/// Counts a weapon name read that is not shaped like one ("1 o5 nn Y113o" under a font pack) and
-/// tells the player once when they keep coming with no weapon decided: the calculator reads the
-/// game's own font.
+/// Counts a weapon name read that is not shaped like one and logs once when they keep coming with
+/// no weapon decided. Only logged: the reading fails for our own reasons (a size the glyphs don't
+/// fit) as well as for a font pack or translation, and the two can't be told apart here.
 fn note_unreadable_label(label: &str, weapon_known: bool) {
     use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
     static COUNT: AtomicU32 = AtomicU32::new(0);
-    static TOLD: AtomicBool = AtomicBool::new(false);
+    static LOGGED: AtomicBool = AtomicBool::new(false);
     if weapon_known || shaped_like_weapon_label(label) {
         return;
     }
-    if COUNT.fetch_add(1, Ordering::Relaxed) + 1 < UNREADABLE_LABELS_TOLD || TOLD.swap(true, Ordering::Relaxed) {
+    if COUNT.fetch_add(1, Ordering::Relaxed) + 1 < UNREADABLE_LABELS_LOGGED || LOGGED.swap(true, Ordering::Relaxed) {
         return;
     }
-    log::warn!("The weapon name keeps reading as no weapon (last \"{label}\"): the game's text is not in the font the calculator reads (font pack?)");
-    std::thread::spawn(|| {
-        use windows::Win32::UI::WindowsAndMessaging::{MB_ICONWARNING, MB_OK, MessageBoxW};
-        unsafe {
-            MessageBoxW(
-                None,
-                windows::core::w!("MTC Calculator cannot read the game's text, so it cannot tell which gun you are on.
-
-It reads the game's own font and English text only: remove any font pack (custom fonts) and turn off Roblox's automatic translation, then restart Roblox."),
-                windows::core::w!("MTC Calculator"),
-                MB_OK | MB_ICONWARNING,
-            )
-        };
-    });
+    log::warn!("The weapon name keeps reading as no weapon's name (last \"{label}\"), and no weapon was recognised this run");
 }
 
 /// Whether `label` looks like a weapon name: a calibre in mm, then a name ("155 mm M185").

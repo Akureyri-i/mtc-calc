@@ -817,6 +817,17 @@ pub fn read_weapon_label(view: &FrameView, client_origin: (i32, i32), reader: &T
     read_weapon_label_among(view, client_origin, reader, &[])
 }
 
+/// The one candidate a glyph-by-glyph reading names once both are normalised: spaces dropped and
+/// "rn" taken for "m" (at some sizes "155 mm M185" reads "155 rnrnM185"). None unless exactly one
+/// candidate matches.
+pub fn label_by_normalised<'a>(text: &str, candidates: &'a [String]) -> Option<&'a String> {
+    let normalised = |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<String>().replace("rn", "m");
+    let want = normalised(text);
+    let mut found = candidates.iter().filter(|c| normalised(c) == want);
+    let first = found.next()?;
+    found.next().is_none().then_some(first)
+}
+
 /// As `read_weapon_label`, the gunner's box first compared whole with the labels the data's weapons
 /// show (`candidates`, `mtc_ammo::AmmoData::label_texts`): the best when it scores
 /// `WEAPON_MATCH_MIN_SCORE` and leads the next by `WEAPON_MATCH_MIN_LEAD`, else read glyph by
@@ -837,7 +848,8 @@ pub fn read_weapon_label_among(view: &FrameView, client_origin: (i32, i32), read
             }
         }
         if let Some(text) = reader.read(view, TextStyle::Weapon, rect, TEXT_MIN_INK) {
-            return Some(digit_calibre(text, || reader.read_number(view, TextStyle::Weapon, rect, TEXT_MIN_INK)));
+            let text = digit_calibre(text, || reader.read_number(view, TextStyle::Weapon, rect, TEXT_MIN_INK));
+            return Some(label_by_normalised(&text, candidates).cloned().unwrap_or(text));
         }
     }
     let (x0, y0, x1, y1) = LOADER_LABEL;
@@ -970,4 +982,18 @@ pub fn countdown_shown_in(view: &FrameView, client_origin: (i32, i32), bar: &Cou
             .count();
         sharp as f64 >= MIN_EDGE_SHARE * f64::from(y1 - y0)
     })
+}
+
+#[cfg(test)]
+mod label_tests {
+    use super::label_by_normalised;
+
+    #[test]
+    fn a_misread_label_names_the_one_weapon_it_normalises_to() {
+        let labels: Vec<String> = ["155 mm M185", "155 mm M284", "152.4 mm 2A64", "12.7 mm QJC88A"].map(String::from).to_vec();
+        assert_eq!(label_by_normalised("155 rnrnM185", &labels).map(String::as_str), Some("155 mm M185"));
+        assert_eq!(label_by_normalised("12.7mm QJC88A", &labels).map(String::as_str), Some("12.7 mm QJC88A"));
+        assert_eq!(label_by_normalised("155 roroM185", &labels), None);
+        assert_eq!(label_by_normalised("5 onnn2A4CM-1", &labels), None);
+    }
 }

@@ -32,6 +32,13 @@ pub fn find_roblox() -> Option<Window> {
 /// query right, which a process running as administrator grants too, and reads nothing of the
 /// process itself.
 pub fn process_file_name(pid: u32) -> windows::core::Result<String> {
+    let path = process_image_path(pid)?;
+    Ok(path.file_name().map_or_else(|| path.to_string_lossy().into_owned(), |n| n.to_string_lossy().into_owned()))
+}
+
+/// The full path of the program process `pid` runs (`QueryFullProcessImageNameW` with limited
+/// query rights only: no access to the process's memory, and it works on elevated processes).
+pub fn process_image_path(pid: u32) -> windows::core::Result<std::path::PathBuf> {
     use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::System::Threading::{OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW};
     let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }?;
@@ -40,8 +47,7 @@ pub fn process_file_name(pid: u32) -> windows::core::Result<String> {
     let result = unsafe { QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, windows::core::PWSTR(path.as_mut_ptr()), &mut len) };
     let _ = unsafe { CloseHandle(process) };
     result?;
-    let path = String::from_utf16_lossy(&path[..len as usize]);
-    Ok(path.rsplit(['\\', '/']).next().unwrap_or(&path).to_string())
+    Ok(std::path::PathBuf::from(String::from_utf16_lossy(&path[..len as usize])))
 }
 
 /// Windows titled like Roblox that `find_roblox` does not take, each with its program or why that

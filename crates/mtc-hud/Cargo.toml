@@ -1,12 +1,15 @@
 [package]
 name = "mtc-hud"
-version = "0.1.2"
+version = "0.1.4"
 edition.workspace = true
 license.workspace = true
 
 [features]
 # The release build: no console window (the output goes to the log file).
 gui = []
+# The release build: the map files and the game's fonts carried inside the program
+# (`tools/release/bundle.py` gathers them into scratch/bundle, or `MTC_BUNDLE_DIR`).
+bundle = []
 
 [dependencies]
 log = { version = "0.4", features = ["std"] }

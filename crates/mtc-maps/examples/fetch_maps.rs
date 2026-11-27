@@ -1,20 +1,23 @@
-//! Fills the map cache from the official map service: every map's heightmap and any missing
-//! reference image (`--refresh` downloads the references again too).
-//!   cargo run --release -p mtc-maps --example fetch_maps [--refresh]
+//! Development: downloads map pictures (and optionally a heightmap) into an empty cache the way
+//! the HUD does, from both hosts at once, and prints how long each took.
+//!   MTC_MAP_CACHE=<empty dir> cargo run --release -p mtc-maps --example fetch_maps -- <slug> [...] [--heightmap]
+use std::time::Instant;
+
 fn main() {
-    let refresh = std::env::args().any(|a| a == "--refresh");
-    for map in mtc_maps::all() {
-        let mut files = Vec::new();
-        if map.heightmap.is_some() {
-            files.push(mtc_maps::HEIGHTMAP_FILE);
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let heightmap = args.iter().any(|a| a == "--heightmap");
+    for slug in args.iter().filter(|a| !a.starts_with("--")) {
+        let map = mtc_maps::all().iter().find(|m| &m.slug == slug).expect("map slug");
+        let started = Instant::now();
+        match mtc_maps::download(map, mtc_maps::REFERENCE_FILE) {
+            Ok(path) => println!("{slug} picture: {} bytes in {:.1} s", std::fs::metadata(&path).map_or(0, |m| m.len()), started.elapsed().as_secs_f64()),
+            Err(e) => println!("{slug} picture failed after {:.1} s: {e}", started.elapsed().as_secs_f64()),
         }
-        if refresh || !mtc_maps::reference_path(map).is_file() {
-            files.push(mtc_maps::REFERENCE_FILE);
-        }
-        for file in files {
-            match mtc_maps::download(map, file) {
-                Ok(path) => println!("{:<22} {file:<14} {} KB", map.id, std::fs::metadata(&path).map_or(0, |m| m.len() / 1024)),
-                Err(e) => println!("{:<22} {file:<14} failed: {e}", map.id),
+        if heightmap {
+            let started = Instant::now();
+            match mtc_maps::download(map, mtc_maps::HEIGHTMAP_FILE) {
+                Ok(path) => println!("{slug} heightmap: {} bytes in {:.1} s", std::fs::metadata(&path).map_or(0, |m| m.len()), started.elapsed().as_secs_f64()),
+                Err(e) => println!("{slug} heightmap failed after {:.1} s: {e}", started.elapsed().as_secs_f64()),
             }
         }
     }
