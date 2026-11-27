@@ -324,9 +324,10 @@ impl ShotLog {
         let gun = self.arrow;
         let predicted = gun.zip(reading).and_then(|(g, r)| fire.landing_from(g.map, r));
         let pick = fire.shell();
-        let shell = pick.map(|p| p.shell.name.clone());
+        // With the charge unknown, the shell without it.
+        let shell = pick.map(|p| if p.charge_known { p.shell.name.clone() } else { p.shell.base_name() });
         let weapon = pick.map(|p| p.weapon.clone());
-        let charge = pick.and_then(|p| p.shell.charge()).map(|c| c.word());
+        let charge = pick.and_then(|p| p.loaded_charge()).map(|c| c.word());
         Shot { n: 0, lit_ms, dark_ms, reading, unsure, shell, weapon, charge, backfilled: false, gun, predicted, impact: None, done: false }
     }
 

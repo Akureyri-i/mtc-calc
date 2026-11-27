@@ -14,6 +14,7 @@ mod clock;
 mod map_marks;
 mod pace;
 mod panel;
+mod shell_icons;
 mod plan;
 mod render;
 mod settings;
@@ -28,10 +29,10 @@ use std::time::Duration;
 pub use aim_strip::{AimRow, AimStrip, Axis, hud_right};
 pub use charge_marks::{ChargeDot, ChargeMarks};
 pub use map_marks::{Blast, CHARGE_COLORS, DragMark, Hover, MapMark, MapMarks, NO_GUN, PanFollow, Planning, RangeRing, RingKind, TargetLabel};
-pub use panel::{ConsentChoice, DiagAction, PanelAction, PanelArc, PanelLoad, PanelSolution, PanelState, PanelTarget, WIDTH as PANEL_WIDTH};
+pub use panel::{ConsentChoice, DiagAction, MenuItem, MenuPick, PanelAction, PanelArc, PanelLoad, PanelMenu, PanelSolution, PanelState, PanelTarget, WIDTH as PANEL_WIDTH};
 pub use map_marks::MARGIN as MAP_MARGIN;
 pub use settings::{ChargeRule, ConsentState, LabelField, LabelFields, Setting, SettingsState, Stepper, ToleranceMode, WIDTH as SETTINGS_WIDTH};
-pub use plan::{PlanArc, PlanChargeBox, PlanDetail, PlanNext, PlanRow, PlanState, PlanTerrain, ProfileArc, TerrainNote, MAX_HEIGHT as PLAN_MAX_HEIGHT, WIDTH as PLAN_WIDTH};
+pub use plan::{PlanArc, PlanChargeBox, PlanDetail, PlanNext, PlanRow, PlanState, PlanTerrain, ProfileArc, TerrainNote, LIMIT_HEIGHT as PLAN_LIMIT_HEIGHT, MAX_HEIGHT as PLAN_MAX_HEIGHT, WIDTH as PLAN_WIDTH};
 
 enum Command {
     Aim(Option<AimStrip>),

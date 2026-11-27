@@ -12,6 +12,7 @@
 use std::path::PathBuf;
 
 use mtc_ammo::{AmmoData, ChargeLevel, Shell, same_ballistics};
+use mtc_overlay::{MenuItem, MenuPick, PanelMenu};
 use mtc_vision::FrameView;
 use mtc_vision::bar::{BarLayout, BarReader};
 use mtc_vision::loading::{CardCharge, Charge, CountdownBox, COUNTDOWN_BOX, Menu, MenuSeat, ShellIcons, countdown_progress_in, countdown_shown_in, find_countdown, gunner_bar_bags, gunner_bar_highlight, gunner_strip_highlight, read_card_texts_among, read_loader_bar, read_menu, read_weapon_label_among};
@@ -80,6 +81,23 @@ fn shaped_like_weapon_label(label: &str) -> bool {
     let calibre = words.next().is_some_and(|w| !w.is_empty() && w.chars().all(|c| c.is_ascii_digit() || c == '.'));
     calibre && words.next() == Some("mm") && words.next().is_some()
 }
+/// Guns on a page of the gun list.
+const GUNS_PER_PAGE: usize = 6;
+
+/// A page of the shell list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ListPage {
+    /// The gun's shells.
+    Shells,
+    /// The guns from this one on (the calibre the label read first).
+    Guns(usize),
+}
+
+/// A charge's name without " Charge" ("Medium").
+fn charge_word(c: ChargeLevel) -> &'static str {
+    c.word().trim_end_matches(" Charge")
+}
+
 /// A hidden countdown counts as run out this long (ms) after its predicted end.
 const RAN_OUT_MARGIN_MS: u64 = 500;
 /// A new loaded slot or charge on the gunner's bar is taken after this many reads in a row.
@@ -115,6 +133,20 @@ pub struct ShellPick {
     pub shell: Shell,
     /// The same shell at each of its charges, Low to High (just `shell` without charges).
     pub family: Vec<Shell>,
+    /// The shell was picked by hand (the shell list), not read.
+    pub by_hand: bool,
+    /// The loaded charge is known: read for this loading or picked by hand. Otherwise `shell` is
+    /// the family's member at the charge last seen, standing in for the family.
+    pub charge_known: bool,
+    /// The charge was picked by hand for this shot.
+    pub charge_by_hand: bool,
+}
+
+impl ShellPick {
+    /// The loaded charge, when known.
+    pub fn loaded_charge(&self) -> Option<ChargeLevel> {
+        self.shell.charge().filter(|_| self.charge_known)
+    }
 }
 
 pub struct LoadingPipeline {
@@ -229,6 +261,24 @@ pub struct LoadingPipeline {
     /// A different loader slot count seen, and in how many reads in a row: the panel's place
     /// changes only when it holds (a vehicle interior behind the bar can flicker the count).
     loader_pending: Option<(usize, u32)>,
+    /// Per slot, the last menu read did not show its charge (the charge column and the bag
+    /// capsule unread): the slot's charge is the one remembered from before, which may have
+    /// changed since.
+    charge_unread: Vec<bool>,
+    /// The slot last seen loading or loaded, its charge as read, and whether that charge was read
+    /// for this loading.
+    loaded_at: Option<(Loaded, bool)>,
+    /// Shells picked by hand per slot (names without the charge): that slot holds it from now on
+    /// whatever is read, until Auto or another weapon.
+    manual: Vec<Option<String>>,
+    /// Picked with no slot seen loading yet: the next slot loaded takes it.
+    manual_next: Option<String>,
+    /// This shot's charge picked by hand, with the slot it was picked for; until the next loading.
+    manual_charge: Option<(Option<usize>, ChargeLevel)>,
+    /// The gun was picked by hand: the label read does not change it (another label does).
+    weapon_by_hand: bool,
+    /// The current shell with the player's picks over what was read (`apply_manual`).
+    chosen: Option<ShellPick>,
 }
 
 /// A new loader slot count is taken after this many reads in a row.
@@ -448,6 +498,13 @@ impl LoadingPipeline {
             menu: None,
             artillery: false,
             loader_pending: None,
+            charge_unread: Vec::new(),
+            loaded_at: None,
+            manual: Vec::new(),
+            manual_next: None,
+            manual_charge: None,
+            weapon_by_hand: false,
+            chosen: None,
         }
     }
 
@@ -460,6 +517,10 @@ impl LoadingPipeline {
         self.elsewhere = elsewhere;
         self.countdown_box = None;
         self.countdown_finds.clear();
+        // Card names read with the old templates (another configuration, or the text size before a
+        // readout fit) are read again with these.
+        self.cards.clear();
+        self.last_text = None;
     }
 
     /// Where the countdown bar is read on this view: the reference's place there, else as found
@@ -542,9 +603,9 @@ impl LoadingPipeline {
         self.weapon.as_deref()
     }
 
-    /// The shell being loaded or loaded last.
+    /// The shell being loaded or loaded last, with the player's picks over what was read.
     pub fn shell(&self) -> Option<&ShellPick> {
-        self.current.as_ref()
+        self.chosen.as_ref().or(self.current.as_ref())
     }
 
     /// A loading is in progress.
@@ -765,6 +826,7 @@ impl LoadingPipeline {
             }
         }
         if let Some(menu) = &menu {
+            self.charge_unread = menu.cards.iter().map(|card| card.charge == CardCharge::Hidden && !(1..=3).contains(&card.bags)).collect();
             self.read_texts(view, origin, menu, now_ms);
             self.last_selected.resize(menu.cards.len(), None);
             for (slot, &charge) in self.tracker.charges().iter().enumerate() {
@@ -816,21 +878,30 @@ impl LoadingPipeline {
         }
         for event in events {
             match event {
-                LoadingEvent::Started { slot } => match slot {
-                    Some(s) => {
-                        log::info!("Loading: slot {}", s + 1);
-                        let charge = self.tracker.charges().get(s).copied().unwrap_or(SlotCharge::Unknown);
-                        self.pick(self.with_shown_charge(Loaded { slot: s, charge }));
+                LoadingEvent::Started { slot } => {
+                    // Another loading: a charge picked by hand was for the shot before.
+                    self.manual_charge = None;
+                    match slot {
+                        Some(s) => {
+                            let charge = self.tracker.charges().get(s).copied().unwrap_or(SlotCharge::Unknown);
+                            let loaded = self.with_shown_charge(Loaded { slot: s, charge });
+                            let known = self.charge_read(s) || loaded.charge == SlotCharge::None;
+                            log::info!("Loading: slot {}{}", s + 1, if known { "" } else { " (its charge not read for this loading)" });
+                            self.note_loading(loaded, known);
+                            self.pick(loaded, known);
+                        }
+                        None => log::info!("Loading"),
                     }
-                    None => log::info!("Loading"),
-                },
+                }
                 LoadingEvent::Loaded(loaded) => {
                     self.fired = false;
                     self.awaiting_load = false;
                     let loaded = self.with_shown_charge(loaded);
-                    log::info!("Loaded: {}", self.describe(loaded));
+                    let known = self.charge_read(loaded.slot) || loaded.charge == SlotCharge::None;
+                    log::info!("Loaded: {}{}", self.describe(loaded), if known { "" } else { " (charge not read for this loading: shown as unknown)" });
                     crate::diag::note(crate::diag::Event::Load);
-                    self.pick(loaded);
+                    self.note_loading(loaded, known);
+                    self.pick(loaded, known);
                     self.bar_check = true;
                 }
             }
@@ -913,7 +984,7 @@ impl LoadingPipeline {
             // High, and the X landed where High lands).
             (Some(loaded), _) if self.bar_loaded == Some(loaded) => {
                 self.bar_pending = None;
-                let differs = self.current.as_ref().is_some_and(|c| c.shell.charge() != level(loaded.loaded.charge));
+                let differs = self.current.as_ref().is_some_and(|c| c.loaded_charge() != level(loaded.loaded.charge));
                 (std::mem::take(&mut self.bar_check) && differs && loaded.kind.is_some()).then_some(loaded)
             }
             (Some(loaded), Some((pending, reads))) if pending == loaded => {
@@ -933,6 +1004,7 @@ impl LoadingPipeline {
             // The shell from the icon's type and the capsule's charge, never from cards read
             // earlier: with a loader aboard the gunner may never see the cards, and in older game
             // versions the bar's order changed with the loader seat.
+            self.note_loading(bar.loaded, true);
             if !self.current_is(bar) {
                 let loaded = bar.loaded;
                 match self.pick_by_kind(bar) {
@@ -944,11 +1016,12 @@ impl LoadingPipeline {
                 }
             }
         }
+        self.apply_manual();
     }
 
     /// The current shell is the bar's: its slot, at its charge, of its icon's type.
     fn current_is(&self, bar: BarShell) -> bool {
-        self.current.as_ref().is_some_and(|c| c.slot == bar.loaded.slot && c.shell.charge() == level(bar.loaded.charge) && bar.kind.is_some_and(|k| c.shell.kind == k))
+        self.current.as_ref().is_some_and(|c| c.slot == bar.loaded.slot && c.charge_known && c.shell.charge() == level(bar.loaded.charge) && bar.kind.is_some_and(|k| c.shell.kind == k))
     }
 
     /// Makes the shell of the bar's type and charge the current one (one ballistic choice); its
@@ -970,6 +1043,9 @@ impl LoadingPipeline {
             slot: bar.loaded.slot,
             shell: (*shell).clone(),
             family: ammo.charge_family(weapon, shell).into_iter().cloned().collect(),
+            by_hand: false,
+            charge_known: true,
+            charge_by_hand: false,
         };
         let name = pick.shell.name.clone();
         self.current = Some(pick);
@@ -1074,6 +1150,13 @@ impl LoadingPipeline {
         self.reload_seen = false;
         self.lit_run_from = None;
         self.menu_was_shown = false;
+        self.charge_unread.clear();
+        self.loaded_at = None;
+        self.manual.clear();
+        self.manual_next = None;
+        self.manual_charge = None;
+        self.weapon_by_hand = false;
+        self.chosen = None;
     }
 
     /// The shot of a screen change: at the first F press within `FIRE_CONFIRM_MS` before it and not
@@ -1132,6 +1215,10 @@ impl LoadingPipeline {
             note_unreadable_label(label, self.weapon.is_some());
             return;
         };
+        // A gun picked by hand stands while this label is on screen.
+        if self.weapon_by_hand {
+            return;
+        }
         if self.weapon.as_deref() != Some(weapon) {
             log::info!("Weapon: {weapon} (screen \"{label}\", cards {names:?})");
             crate::diag::note(crate::diag::Event::Weapon(weapon.to_owned()));
@@ -1231,8 +1318,10 @@ impl LoadingPipeline {
         if left.is_empty() { shells } else { left }
     }
 
-    /// Makes the slot's shell the current one, when it is known; whether it was.
-    fn pick(&mut self, loaded: Loaded) -> bool {
+    /// Makes the slot's shell the current one, when it is known; whether it was. `charge_known`:
+    /// the charge was read for this loading (else the shell is found by the charge last seen and
+    /// its charge shown as unknown).
+    fn pick(&mut self, loaded: Loaded, charge_known: bool) -> bool {
         let candidates = self.candidates(loaded);
         // Fuze variants (HE, VT, PF) fly alike: the shortest name stands for them.
         let (Some(shell), Some(ammo), Some(weapon)) = (candidates.iter().min_by_key(|s| s.name.len()), &self.ammo, &self.weapon) else { return false };
@@ -1241,11 +1330,232 @@ impl LoadingPipeline {
             slot: loaded.slot,
             shell: (*shell).clone(),
             family: ammo.charge_family(weapon, shell).into_iter().cloned().collect(),
+            by_hand: false,
+            charge_known: charge_known || shell.charge().is_none(),
+            charge_by_hand: false,
         };
         if self.current.as_ref() != Some(&pick) {
             self.current = Some(pick);
         }
         true
+    }
+
+    /// The slot's charge was read on the last menu read (the game keeps each card's charge, so a
+    /// charge read long before still stands; one remembered past an unread column may not).
+    fn charge_read(&self, slot: usize) -> bool {
+        !self.charge_unread.get(slot).copied().unwrap_or(false)
+    }
+
+    /// A slot seen loading or loaded: the slot the player's picks go to. A shell picked before any
+    /// was seen goes to this one.
+    fn note_loading(&mut self, loaded: Loaded, charge_known: bool) {
+        self.loaded_at = Some((loaded, charge_known));
+        if let Some(name) = self.manual_next.take() {
+            self.set_slot_pick(loaded.slot, Some(name));
+        }
+    }
+
+    fn set_slot_pick(&mut self, slot: usize, shell: Option<String>) {
+        if self.manual.len() <= slot {
+            self.manual.resize(slot + 1, None);
+        }
+        self.manual[slot] = shell;
+    }
+
+    /// The slot the player's picks go to (`None`: none seen loading yet).
+    fn pick_slot(&self) -> Option<usize> {
+        self.loaded_at.map(|(l, _)| l.slot)
+    }
+
+    /// The shell picked by hand for that slot.
+    fn slot_pick(&self) -> Option<&String> {
+        match self.pick_slot() {
+            Some(slot) => self.manual.get(slot).and_then(Option::as_ref),
+            None => self.manual_next.as_ref(),
+        }
+    }
+
+    /// What was read for the slot the picks go to: the shell (name without its charge) and its
+    /// charge, when known.
+    fn read_for_slot(&self) -> (Option<String>, Option<ChargeLevel>) {
+        let slot = self.pick_slot();
+        match self.current.as_ref().filter(|c| Some(c.slot) == slot) {
+            Some(c) => (Some(c.shell.base_name()), c.loaded_charge()),
+            None => (None, self.loaded_at.filter(|&(_, known)| known).and_then(|(l, _)| level(l.charge))),
+        }
+    }
+
+    /// The current shell with the player's picks over what was read: the shell picked for the
+    /// slot, at the charge read or picked for this shot. With no slot seen loading yet, a pick
+    /// stands for whatever is loaded.
+    fn apply_manual(&mut self) {
+        self.chosen = None;
+        let slot = self.pick_slot();
+        let picked = self.slot_pick().cloned();
+        let charge = self.manual_charge.filter(|&(s, _)| s == slot).map(|(_, c)| c);
+        if picked.is_none() && charge.is_none() {
+            return;
+        }
+        let (Some(ammo), Some(weapon)) = (&self.ammo, &self.weapon) else { return };
+        let (read_shell, read_charge) = self.read_for_slot();
+        let Some(base) = picked.clone().or(read_shell) else { return };
+        let shells: Vec<&Shell> = ammo.shells(weapon).iter().filter(|s| s.base_name() == base).collect();
+        let charged = shells.iter().any(|s| s.charge().is_some());
+        let want = charge.or(read_charge);
+        let shell = match want {
+            Some(c) if charged => shells.iter().find(|s| s.charge() == Some(c)).or(shells.first()),
+            _ => shells.first(),
+        };
+        let Some(shell) = shell else { return };
+        self.chosen = Some(ShellPick {
+            weapon: weapon.clone(),
+            slot: slot.unwrap_or_default(),
+            shell: (*shell).clone(),
+            family: ammo.charge_family(weapon, shell).into_iter().cloned().collect(),
+            by_hand: picked.is_some(),
+            charge_known: !charged || shell.charge().is_some() && shell.charge() == want,
+            charge_by_hand: charge.is_some(),
+        });
+    }
+
+    /// A row of the shell or charge list was clicked: the pick taken (paging is the caller's).
+    pub fn pick_from_list(&mut self, pick: &MenuPick) {
+        match pick {
+            MenuPick::Auto => self.set_manual_shell(None),
+            MenuPick::Shell(name) => self.set_manual_shell(Some(name.clone())),
+            MenuPick::Gun(name) => self.set_manual_weapon(name),
+            MenuPick::Charge(index) => self.set_manual_charge(index.map(|i| ChargeLevel::ALL[usize::from(i.min(2))])),
+            MenuPick::More(_) | MenuPick::Back(_) => {}
+        }
+        self.apply_manual();
+    }
+
+    /// The shell picked for the slot the picks go to (`None`: as read again).
+    fn set_manual_shell(&mut self, shell: Option<String>) {
+        let slot = self.pick_slot();
+        let (read, _) = self.read_for_slot();
+        let card = slot.and_then(|s| self.cards.get(s)).and_then(Option::as_ref).map(|c| c.name.clone());
+        match slot {
+            Some(s) => self.set_slot_pick(s, shell.clone()),
+            None => self.manual_next = shell.clone(),
+        }
+        let at = slot.map_or("the next slot loaded".to_owned(), |s| format!("slot {}", s + 1));
+        log::info!("Shell picked by hand: {} for {at} (read {}, card {})", shell.as_deref().unwrap_or("Auto"), read.as_deref().unwrap_or("nothing"), card.as_deref().unwrap_or("not read"));
+        crate::diag::note(crate::diag::Event::ManualPick(crate::diag::ManualPick { what: "shell", weapon: self.weapon.clone(), slot: slot.map(|s| s as u32 + 1), picked: shell, read, card }));
+    }
+
+    /// This shot's charge picked (`None`: as read again).
+    fn set_manual_charge(&mut self, charge: Option<ChargeLevel>) {
+        let slot = self.pick_slot();
+        let (_, read) = self.read_for_slot();
+        self.manual_charge = charge.map(|c| (slot, c));
+        log::info!("Charge picked by hand: {} (read {})", charge.map_or("Auto", charge_word), read.map_or("nothing", charge_word));
+        let picked = charge.map(|c| charge_word(c).to_owned());
+        crate::diag::note(crate::diag::Event::ManualPick(crate::diag::ManualPick { what: "charge", weapon: self.weapon.clone(), slot: slot.map(|s| s as u32 + 1), picked, read: read.map(|c| charge_word(c).to_owned()), card: None }));
+    }
+
+    /// The gun picked by hand: its cards read and its shells listed from now on, until another
+    /// weapon's label is read.
+    fn set_manual_weapon(&mut self, weapon: &str) {
+        log::info!("Gun picked by hand: {weapon} (recognised {}, label {})", self.weapon.as_deref().unwrap_or("none"), self.weapon_label.as_deref().unwrap_or("not read"));
+        crate::diag::note(crate::diag::Event::ManualPick(crate::diag::ManualPick { what: "gun", weapon: Some(weapon.to_owned()), slot: None, picked: Some(weapon.to_owned()), read: self.weapon.clone(), card: self.weapon_label.clone() }));
+        if self.weapon.as_deref() != Some(weapon) {
+            // The other gun's shells, cards and bar reading go: read again as this gun's.
+            self.manual.clear();
+            self.manual_next = None;
+            self.manual_charge = None;
+            self.current = None;
+            self.cards.clear();
+            self.last_selected.clear();
+            self.last_text = None;
+            self.bar_loaded = None;
+            self.bar_pending = None;
+        }
+        self.weapon = Some(weapon.to_owned());
+        self.weapon_by_hand = true;
+        self.artillery = mtc_ammo::is_artillery_weapon(weapon);
+    }
+
+    /// The page the shell list opens on: the shells, or the guns while no gun is known.
+    pub fn first_page(&self) -> ListPage {
+        if self.weapon.is_some() { ListPage::Shells } else { ListPage::Guns(0) }
+    }
+
+    /// Every artillery gun with shells in the data, for the gun list: those of the calibre the
+    /// weapon label reads first, then by calibre.
+    fn gun_order(&self) -> Vec<String> {
+        let Some(ammo) = &self.ammo else { return Vec::new() };
+        let read = [self.weapon_label.as_deref(), self.vehicle_label.as_deref(), self.weapon.as_deref()].into_iter().flatten().find_map(mtc_ammo::calibre);
+        let mut guns: Vec<(bool, u32, &str)> = ammo.artillery_weapons().into_iter().map(|g| {
+            let calibre = mtc_ammo::calibre(g);
+            (read.is_none() || calibre != read, calibre.unwrap_or(u32::MAX), g)
+        }).collect();
+        guns.sort_unstable();
+        guns.into_iter().map(|(_, _, g)| g.to_owned()).collect()
+    }
+
+    /// The shell list on `page` (`None` with no ammunition data): "Auto" with what was read, the
+    /// gun's shells with their icons, another gun; or a page of guns with what carries them.
+    pub fn shell_list(&self, page: ListPage, open: bool) -> Option<PanelMenu> {
+        let ammo = self.ammo.as_ref()?;
+        let picked = self.slot_pick();
+        let row = |label: String, kind: Option<String>, detail: Option<String>, current: bool, pick: MenuPick| MenuItem { label, kind, detail, current, pick };
+        let mut items = Vec::new();
+        // With no gun known the list is the guns'.
+        let page = match (page, &self.weapon) {
+            (ListPage::Shells, None) => ListPage::Guns(0),
+            (page, _) => page,
+        };
+        match page {
+            ListPage::Shells => {
+                let weapon = self.weapon.as_ref()?;
+                let (read, _) = self.read_for_slot();
+                items.push(row("Auto".into(), None, Some(read.map_or("not read".to_owned(), |r| format!("read {r}"))), picked.is_none(), MenuPick::Auto));
+                let mut listed: Vec<String> = Vec::new();
+                for shell in ammo.shells(weapon) {
+                    let base = shell.base_name();
+                    if !listed.contains(&base) {
+                        items.push(row(base.clone(), Some(shell.kind.clone()), None, picked == Some(&base), MenuPick::Shell(base.clone())));
+                        listed.push(base);
+                    }
+                }
+                items.push(row("Other gun".into(), None, None, false, MenuPick::More(0)));
+            }
+            ListPage::Guns(start) => {
+                let guns = self.gun_order();
+                if start > 0 {
+                    items.push(row("Back".into(), None, None, false, MenuPick::Back(Some(start.saturating_sub(GUNS_PER_PAGE)))));
+                } else if self.weapon.is_some() {
+                    items.push(row("Shells".into(), None, None, false, MenuPick::Back(None)));
+                }
+                for gun in guns.iter().skip(start).take(GUNS_PER_PAGE) {
+                    let detail = mtc_ammo::carriers(gun).first().cloned();
+                    items.push(row(gun.clone(), None, detail, self.weapon.as_deref() == Some(gun.as_str()), MenuPick::Gun(gun.clone())));
+                }
+                if guns.len() > start + GUNS_PER_PAGE {
+                    items.push(row("More guns".into(), None, None, false, MenuPick::More(start + GUNS_PER_PAGE)));
+                }
+            }
+        }
+        Some(PanelMenu { open, items, manual: picked.is_some() })
+    }
+
+    /// The charge list for the current shell (`None` when it has no charges): "Auto" with the
+    /// charge read, then each charge.
+    pub fn charge_list(&self, open: bool) -> Option<PanelMenu> {
+        let shell = self.shell()?;
+        if shell.shell.charge().is_none() {
+            return None;
+        }
+        let slot = self.pick_slot();
+        let picked = self.manual_charge.filter(|&(s, _)| s == slot).map(|(_, c)| c);
+        let (_, read) = self.read_for_slot();
+        let mut items = vec![MenuItem { label: "Auto".into(), kind: None, detail: Some(read.map_or("not read".to_owned(), |c| format!("read {}", charge_word(c)))), current: picked.is_none(), pick: MenuPick::Charge(None) }];
+        for member in &shell.family {
+            let Some(c) = member.charge() else { continue };
+            items.push(MenuItem { label: charge_word(c).into(), kind: None, detail: None, current: picked == Some(c), pick: MenuPick::Charge(Some(c as u8)) });
+        }
+        Some(PanelMenu { open, items, manual: picked.is_some() })
     }
 
     /// "slot 2 · High · M107 High Charge · 684 m/s", or the slot and charge when the shell is not
@@ -1281,6 +1591,86 @@ mod tests {
     }
 
     use super::*;
+
+    fn low(slot: usize) -> Loaded {
+        Loaded { slot, charge: SlotCharge::Selected(Charge::Low) }
+    }
+
+    /// A shell picked by hand holds for its slot, at the charge read, until Auto; another slot is
+    /// read as before; a pick before any loading goes to the next slot loaded.
+    #[test]
+    fn a_shell_picked_by_hand_stays_with_its_slot() {
+        let mut p = LoadingPipeline::new();
+        if p.ammo.is_none() {
+            eprintln!("skipped: no ammunition data on this machine");
+            return;
+        }
+        p.weapon = Some("155mm M284".into());
+        p.note_loading(low(1), true);
+        p.pick_from_list(&MenuPick::Shell("M110".into()));
+        let shell = p.shell().expect("picked");
+        assert_eq!((shell.shell.base_name().as_str(), shell.loaded_charge(), shell.by_hand), ("M110", Some(ChargeLevel::Low), true));
+        p.note_loading(low(2), true);
+        p.apply_manual();
+        assert!(p.shell().is_none(), "slot 3 is read, and nothing was");
+        p.note_loading(low(1), true);
+        p.apply_manual();
+        assert_eq!(p.shell().map(|s| s.shell.base_name()), Some("M110".into()), "slot 2 again");
+        p.pick_from_list(&MenuPick::Auto);
+        assert!(p.shell().is_none(), "Auto: as read");
+
+        let mut p = LoadingPipeline::new();
+        p.weapon = Some("155mm M284".into());
+        p.pick_from_list(&MenuPick::Shell("M107 VT".into()));
+        assert_eq!(p.shell().map(|s| (s.shell.base_name(), s.charge_known)), Some(("M107 VT".into(), false)), "before any loading: charge unknown");
+        p.note_loading(low(0), true);
+        p.apply_manual();
+        assert_eq!(p.manual.first().cloned().flatten().as_deref(), Some("M107 VT"), "the next slot loaded took it");
+        assert_eq!(p.shell().and_then(ShellPick::loaded_charge), Some(ChargeLevel::Low));
+    }
+
+    /// A charge picked by hand is this shot's; a gun picked by hand stands against the label it
+    /// was picked over and goes with another weapon's.
+    #[test]
+    fn charges_and_guns_picked_by_hand() {
+        let mut p = LoadingPipeline::new();
+        if p.ammo.is_none() {
+            eprintln!("skipped: no ammunition data on this machine");
+            return;
+        }
+        p.weapon = Some("155mm M284".into());
+        p.note_loading(Loaded { slot: 0, charge: SlotCharge::Unknown }, false);
+        p.pick_from_list(&MenuPick::Shell("M107".into()));
+        assert_eq!(p.shell().map(|s| s.charge_known), Some(false), "charge not read");
+        p.pick_from_list(&MenuPick::Charge(Some(2)));
+        let shell = p.shell().expect("picked");
+        assert_eq!((shell.loaded_charge(), shell.charge_by_hand), (Some(ChargeLevel::High), true));
+        assert!(p.charge_list(false).is_some_and(|m| m.manual));
+        p.note_loading(low(1), true);
+        p.apply_manual();
+        assert!(p.shell().is_none(), "another slot: the charge was the other shot's");
+
+        let mut p = LoadingPipeline::new();
+        p.weapon_label = Some("155 mm M284".into());
+        p.pick_from_list(&MenuPick::Gun("155mm M185".into()));
+        assert_eq!((p.weapon.as_deref(), p.artillery), (Some("155mm M185"), true));
+        p.decide_weapon();
+        assert_eq!(p.weapon.as_deref(), Some("155mm M185"), "the label it was picked over");
+        let guns = p.gun_order();
+        assert!(guns.iter().take(3).all(|g| mtc_ammo::calibre(g) == Some(155)), "the label's calibre first: {guns:?}");
+        p.switch_weapon("152.4 mm 2A64");
+        assert!(!p.weapon_by_hand && p.weapon.is_none(), "another weapon's label");
+    }
+
+    /// A slot's charge counts for a loading unless the last menu read left it unread.
+    #[test]
+    fn a_charge_remembered_past_an_unread_column_is_unknown() {
+        let mut p = LoadingPipeline::new();
+        assert!(p.charge_read(0), "no menu read: as before");
+        p.charge_unread = vec![false, true];
+        assert!(p.charge_read(0));
+        assert!(!p.charge_read(1));
+    }
 
     #[test]
     fn only_artillery_shots_are_recorded() {

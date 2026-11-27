@@ -18,7 +18,7 @@ use serde::Serialize;
 
 /// Bumped when what is collected grows, so the startup question comes back for players who
 /// agreed to an earlier version.
-pub const RECORD_VERSION: u32 = 1;
+pub const RECORD_VERSION: u32 = 2;
 /// Where the statistics go: the receiver on our own domain (`tools/diag/worker.js`; workers.dev
 /// is blocked in mainland China). `MTC_DIAG_URL` overrides it, for a local test receiver.
 const ENDPOINT: Option<&str> = Some("https://stats.mtc-calc.dev/");
@@ -83,6 +83,22 @@ pub struct ShotRecord {
     pub n: u32,
 }
 
+/// A pick the player made by hand in the shell list: what ("shell", "charge", "gun"), the gun, the
+/// slot (1-based), the pick (`None`: back to what is read), what was read and the slot's card text
+/// (for a gun: the weapon label read).
+#[derive(Clone, Debug, Serialize)]
+pub struct ManualPick {
+    pub what: &'static str,
+    pub weapon: Option<String>,
+    pub slot: Option<u32>,
+    pub picked: Option<String>,
+    pub read: Option<String>,
+    pub card: Option<String>,
+}
+
+/// Picks by hand kept per run record.
+const MANUAL_PICKS_KEPT: usize = 100;
+
 /// What a 5 s report measured (`stats::Stats::maybe_report`).
 #[derive(Clone, Debug, Default)]
 pub struct Report {
@@ -111,6 +127,9 @@ pub struct ConfigRecord {
     pub full_map_found: Option<[f64; 3]>,
     /// The countdown bar found on screen (reference geometry: x0, y0, x1, y1).
     pub countdown: Option<[i32; 4]>,
+    /// The angle readout's text scale found on screen (times the rule's), its value-line offset (px)
+    /// and the decode's cost, when the rule read it poorly.
+    pub readout_fit: Option<[f64; 3]>,
 }
 
 /// Counted over the run.
@@ -127,6 +146,7 @@ struct Counts {
     shots: BTreeMap<&'static str, u32>,
     seat_reads: u32,
     seat_own_found: u32,
+    manual_picks: Vec<ManualPick>,
 }
 
 /// The run's record, built when it is sent or viewed.
@@ -162,6 +182,8 @@ pub struct RunRecord {
     pub shots: BTreeMap<&'static str, u32>,
     pub seat_reads: u32,
     pub seat_own_found: u32,
+    /// Shells, charges and guns the player picked by hand (`ManualPick`).
+    pub manual_picks: Vec<ManualPick>,
     pub settings: BTreeMap<&'static str, String>,
     pub panics: u32,
 }
@@ -183,6 +205,9 @@ pub enum Event {
     /// A map container found on screen (the full map's or the minimap's) less the rule's.
     Container(bool, [f64; 3]),
     Countdown((i32, i32, i32, i32)),
+    /// The readout's text scale (times the rule's), value-line offset and decode cost found on screen.
+    ReadoutFit(f32, i32, u32),
+    ManualPick(ManualPick),
 }
 
 static EVENTS: Mutex<Vec<Event>> = Mutex::new(Vec::new());
@@ -282,6 +307,16 @@ impl Diag {
                 Event::SeatRead(own) => self.seat_read(own),
                 Event::Container(full, diff) => self.container_found(full, diff),
                 Event::Countdown(interior) => self.countdown_found(interior),
+                Event::ReadoutFit(factor, dy, cost) => {
+                    if let Some(i) = self.counts.current_config {
+                        self.counts.configs[i].readout_fit = Some([f64::from(factor), f64::from(dy), f64::from(cost)]);
+                    }
+                }
+                Event::ManualPick(pick) => {
+                    if self.counts.manual_picks.len() < MANUAL_PICKS_KEPT {
+                        self.counts.manual_picks.push(pick);
+                    }
+                }
             }
         }
     }
@@ -393,6 +428,7 @@ impl Diag {
             shots: self.counts.shots.clone(),
             seat_reads: self.counts.seat_reads,
             seat_own_found: self.counts.seat_own_found,
+            manual_picks: self.counts.manual_picks.clone(),
             settings,
             panics: PANICS.load(std::sync::atomic::Ordering::Relaxed),
         }

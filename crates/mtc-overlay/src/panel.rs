@@ -36,7 +36,8 @@ use crate::window;
 
 /// Window width and largest height in physical pixels.
 pub const WIDTH: i32 = 336;
-const MAX_HEIGHT: i32 = 300;
+/// Tall enough for the full card with the shell list open (eight rows).
+const MAX_HEIGHT: i32 = 560;
 /// The surface is made for scales up to this; the window shows the scaled card.
 const MAX_SCALE: f32 = 1.6;
 const SURFACE: (u32, u32) = ((WIDTH as f32 * MAX_SCALE) as u32, (MAX_HEIGHT as f32 * MAX_SCALE) as u32);
@@ -55,6 +56,8 @@ const GUN_W: f32 = 106.0;
 const HEADER_H: f32 = 34.0;
 const CELL_H: f32 = 36.0;
 const ROW_H: f32 = 30.0;
+/// The shell list's left edge: under the SHELL row's value.
+const MENU_LEFT: f32 = PAD + 68.0;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PanelTarget {
@@ -84,6 +87,57 @@ pub struct PanelSolution {
     pub high: Option<PanelArc>,
 }
 
+/// What a row of the shell list does when clicked.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MenuPick {
+    /// The shell read from the screen again for this slot.
+    Auto,
+    /// This shell (its name without the charge) for the slot.
+    Shell(String),
+    /// This gun (the data's name).
+    Gun(String),
+    /// This shot's charge (0 Low, 1 Medium, 2 High; `None`: as read).
+    Charge(Option<u8>),
+    /// The list's next page, from this gun on (drawn with a "›").
+    More(usize),
+    /// Back a page (drawn with a "‹"): the guns from this one on, or the shells (`None`).
+    Back(Option<usize>),
+}
+
+/// A list row's text: a page back with a "‹" before it, the next page with a "›" after.
+pub(crate) fn menu_label(item: &MenuItem) -> String {
+    match item.pick {
+        MenuPick::Back(_) => format!("\u{2039}  {}", item.label),
+        MenuPick::More(_) => format!("{}  \u{203A}", item.label),
+        _ => item.label.clone(),
+    }
+}
+
+/// One row of the shell list.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MenuItem {
+    pub label: String,
+    /// The shell data's `type` ("HE", "TIME FUZE"): its icon from the game's library beside the
+    /// name.
+    pub kind: Option<String>,
+    /// Dim text at the row's right ("read", "6 guns").
+    pub detail: Option<String>,
+    /// What is in use now (drawn selected).
+    pub current: bool,
+    pub pick: MenuPick,
+}
+
+/// The SHELL row's list: the loaded slot's shell picked by hand when it was not read or read
+/// wrong.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PanelMenu {
+    /// The list is shown (above the SHELL row).
+    pub open: bool,
+    pub items: Vec<MenuItem>,
+    /// The loaded slot's shell was picked by hand.
+    pub manual: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PanelLoad {
     /// Nothing known loaded.
@@ -104,6 +158,8 @@ pub struct PanelState {
     pub solution: Option<PanelSolution>,
     /// Name of the current shell without its charge ("M107 VT").
     pub shell: Option<String>,
+    /// Its data `type` ("TIME FUZE"): the game's icon before the name.
+    pub shell_kind: Option<String>,
     pub load: PanelLoad,
     /// The charge of the current shell ("Low"), when it has charges.
     pub charge: Option<String>,
@@ -122,6 +178,10 @@ pub struct PanelState {
     pub settings_open: bool,
     /// The scale the card is drawn at (1 at the reference configuration).
     pub scale: f32,
+    /// The shell list behind the SHELL row (`None`: no ammunition data to list).
+    pub menu: Option<PanelMenu>,
+    /// The charge list behind the CHARGE row (`None`: no shell with charges).
+    pub charge_menu: Option<PanelMenu>,
 }
 
 /// The diagnostics buttons in the settings window.
@@ -169,6 +229,12 @@ pub enum PanelAction {
     Targets(bool),
     /// A change in the settings window.
     Set(crate::settings::Setting),
+    /// Open (`true`) or close the shell list.
+    Menu(bool),
+    /// Open (`true`) or close the charge list.
+    ChargeMenu(bool),
+    /// A row of the shell list.
+    Pick(MenuPick),
 }
 
 /// A press on the card: where (window px and screen px) and where the card was then.
@@ -464,6 +530,42 @@ impl PanelWindow {
         self.hover.is_some_and(|p| inside(r, p))
     }
 
+    /// An open list from `y` down: a framed drop-down under the value column, a darker box of
+    /// rows; the y under it and its rows' clickable areas. The row in use is tinted and framed
+    /// amber, the icons keep their own colours.
+    fn list(&self, menu: &PanelMenu, mut y: f32) -> windows::core::Result<(f32, Vec<(D2D_RECT_F, PanelAction)>)> {
+        let p = palette();
+        let s = &self.surface;
+        let (left, right) = (MENU_LEFT, WIDTH as f32 - PAD + 4.0);
+        let top = y;
+        let mut hits = Vec::new();
+        s.fill_rect(rect(left, top + 4.0, right, top + ROW_H * menu.items.len() as f32), rgba(10, 13, 15, 0.55));
+        // Names line up after the icon column when any row has an icon.
+        let iconned = menu.items.iter().any(|i| i.kind.as_deref().and_then(crate::shell_icons::for_kind).is_some());
+        for (i, item) in menu.items.iter().enumerate() {
+            let r = rect(left, y + if i == 0 { 4.0 } else { 0.0 }, right, y + ROW_H);
+            if item.current {
+                s.fill_rect(r, rgba(226, 174, 70, 0.22));
+                s.stroke_rect(r, p.amber, 1.0);
+            } else if self.hovered(&r) {
+                s.fill_rect(r, p.hover);
+            }
+            let detail = if item.current { p.amber } else { p.grey };
+            let text_left = if iconned { left + 36.0 } else { left + 8.0 };
+            if let Some(icon) = item.kind.as_deref().and_then(crate::shell_icons::for_kind) {
+                s.image(icon, crate::shell_icons::SIDE, rect(left + 6.0, y + 3.0, left + 30.0, y + 27.0))?;
+            }
+            s.flat_text(&menu_label(item), &self.value, rect(text_left, y + 1.0, right - 90.0, y + ROW_H + 1.0), p.white);
+            if let Some(d) = &item.detail {
+                s.flat_text(d, &self.label_right, rect(right - 120.0, y + 1.0, right - 8.0, y + ROW_H + 1.0), detail);
+            }
+            hits.push((r, PanelAction::Pick(item.pick.clone())));
+            y += ROW_H;
+        }
+        s.stroke_rect(rect(left, top + 4.0, right, y), p.line, 1.0);
+        Ok((y, hits))
+    }
+
     /// The one-line card used while scoped: target, distance, charge, or what is missing.
     fn draw_compact(&mut self, state: &PanelState) -> windows::core::Result<i32> {
         let p = palette();
@@ -650,8 +752,20 @@ impl PanelWindow {
             line(y);
         }
 
+        // The shell list, opened from the SHELL row: it grows upwards from it (the card stands on
+        // its bottom edge), the row in use selected as the target cells are.
+        if let Some(menu) = state.menu.as_ref().filter(|m| m.open) {
+            let (below, hits) = self.list(menu, y)?;
+            self.hits.extend(hits);
+            y = below;
+            line(y);
+        }
+
         // Shell with its loading state; its charge with the recommended one when that differs.
+        // With a list to pick from, the shell is a button: a caret after it, the list on a click.
         s.flat_text("SHELL", &self.label, rect(PAD, y, PAD + 76.0, y + ROW_H), p.grey);
+        let shell_box = rect(PAD + 70.0, y + 3.0, w - PAD - 80.0, y + ROW_H - 3.0);
+        let mut caret_x = PAD + 76.0;
         match &state.shell {
             Some(shell) => {
                 let (tag, tag_color) = match state.load {
@@ -660,18 +774,76 @@ impl PanelWindow {
                     PanelLoad::Fired => ("EMPTY", p.amber),
                     PanelLoad::Empty => ("", p.grey),
                 };
-                s.flat_text(shell, &self.value, rect(PAD + 76.0, y, w - PAD - 78.0, y + ROW_H), p.white);
+                let mut x = PAD + 76.0;
+                if let Some(icon) = state.shell_kind.as_deref().and_then(crate::shell_icons::for_kind) {
+                    s.image(icon, crate::shell_icons::SIDE, rect(x - 2.0, y + 4.0, x + 20.0, y + 26.0))?;
+                    x += 26.0;
+                }
+                s.flat_text(shell, &self.value, rect(x, y, w - PAD - 78.0, y + ROW_H), p.white);
+                caret_x = x + s.text_width(shell, &self.value)?;
                 s.flat_text(tag, &self.label_right, rect(w - PAD - 76.0, y, w - PAD, y + ROW_H), tag_color);
             }
             // Not seen loading since the HUD started (or nothing loaded yet).
-            None => s.flat_text("unknown", &self.value, rect(PAD + 76.0, y, w - PAD, y + ROW_H), p.dim),
+            None => {
+                s.flat_text("unknown", &self.value, rect(PAD + 76.0, y, w - PAD, y + ROW_H), p.dim);
+                caret_x += s.text_width("unknown", &self.value)?;
+            }
+        }
+        if let Some(menu) = &state.menu {
+            let hovered = self.hovered(&shell_box);
+            if hovered || menu.open {
+                s.fill_rect(shell_box, p.hover);
+            }
+            if menu.manual {
+                // Picked by hand: said in amber after the name.
+                let x = caret_x + 8.0;
+                s.flat_text("MANUAL", &self.caption, rect(x, y + 1.0, x + 60.0, y + ROW_H + 1.0), p.amber);
+                caret_x = x + s.text_width("MANUAL", &self.caption)?;
+            }
+            let (cx, cy) = (caret_x + 11.0, y + ROW_H / 2.0);
+            let caret = if menu.open { [(cx - 4.0, cy + 2.0), (cx + 4.0, cy + 2.0), (cx, cy - 2.5)] } else { [(cx - 4.0, cy - 2.0), (cx + 4.0, cy - 2.0), (cx, cy + 2.5)] };
+            s.polygon(&caret, Some(if hovered || menu.open { p.white } else { p.grey }), None)?;
+            self.hits.push((shell_box, PanelAction::Menu(!menu.open)));
         }
         y += ROW_H;
-        if state.charge.is_some() || state.recommended.is_some() {
+        if state.charge.is_some() || state.recommended.is_some() || state.charge_menu.is_some() {
+            // The charge list opens above the CHARGE row, as the shell list above the SHELL row.
+            if let Some(menu) = state.charge_menu.as_ref().filter(|m| m.open) {
+                line(y);
+                let (below, hits) = self.list(menu, y)?;
+                self.hits.extend(hits);
+                y = below;
+            }
             line(y);
             s.flat_text("CHARGE", &self.label, rect(PAD, y, PAD + 76.0, y + ROW_H), p.grey);
-            if let Some(now) = &state.charge {
-                s.flat_text(now, &self.value, rect(PAD + 76.0, y, PAD + 170.0, y + ROW_H), p.white);
+            let mut caret_x = PAD + 76.0;
+            match &state.charge {
+                Some(now) => {
+                    s.flat_text(now, &self.value, rect(PAD + 76.0, y, PAD + 170.0, y + ROW_H), p.white);
+                    caret_x += s.text_width(now, &self.value)?;
+                }
+                // A shell with charges whose loaded charge was not read.
+                None if state.charge_menu.is_some() && state.shell.is_some() => {
+                    s.flat_text("unknown", &self.value, rect(PAD + 76.0, y, PAD + 170.0, y + ROW_H), p.dim);
+                    caret_x += s.text_width("unknown", &self.value)?;
+                }
+                None => {}
+            }
+            if let Some(menu) = &state.charge_menu {
+                let charge_box = rect(PAD + 70.0, y + 3.0, w - PAD - 160.0, y + ROW_H - 3.0);
+                let hovered = self.hovered(&charge_box);
+                if hovered || menu.open {
+                    s.fill_rect(charge_box, p.hover);
+                }
+                if menu.manual {
+                    let x = caret_x + 8.0;
+                    s.flat_text("MANUAL", &self.caption, rect(x, y + 1.0, x + 60.0, y + ROW_H + 1.0), p.amber);
+                    caret_x = x + s.text_width("MANUAL", &self.caption)?;
+                }
+                let (cx, cy) = (caret_x + 11.0, y + ROW_H / 2.0);
+                let caret = if menu.open { [(cx - 4.0, cy + 2.0), (cx + 4.0, cy + 2.0), (cx, cy - 2.5)] } else { [(cx - 4.0, cy - 2.0), (cx + 4.0, cy - 2.0), (cx, cy + 2.5)] };
+                s.polygon(&caret, Some(if hovered || menu.open { p.white } else { p.grey }), None)?;
+                self.hits.push((charge_box, PanelAction::ChargeMenu(!menu.open)));
             }
             if let Some(best) = state.recommended.as_ref().filter(|r| state.charge.as_ref() != Some(*r)) {
                 s.flat_text(&format!("use {best}"), &self.value_right, rect(w - PAD - 150.0, y, w - PAD, y + ROW_H), p.amber);
@@ -703,8 +875,14 @@ impl PanelWindow {
         if state.notice.is_some() {
             h += ROW_H;
         }
+        if let Some(menu) = state.menu.as_ref().filter(|m| m.open) {
+            h += ROW_H * menu.items.len() as f32;
+        }
         h += ROW_H;
-        if state.charge.is_some() || state.recommended.is_some() {
+        if state.charge.is_some() || state.recommended.is_some() || state.charge_menu.is_some() {
+            if let Some(menu) = state.charge_menu.as_ref().filter(|m| m.open) {
+                h += ROW_H * menu.items.len() as f32;
+            }
             h += ROW_H;
         }
         (h as i32).min(MAX_HEIGHT)

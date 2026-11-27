@@ -67,6 +67,8 @@
 
 - 自己认出是哪张地图、你的炮在哪；打开一次大地图就设好了。
 - 在地图上画出预测落点，也能认出每发炮弹实际落在哪里。
+- 弹种、装药或炮认错了、认不出来时，点面板上的 SHELL 或 CHARGE 一行自己选；选的记在那一格上，选“Auto”恢复自动。
+- 私人服的调试地图也能用：在设置的 Map 一项里选 Debug map。
 - 按窗口大小和 Windows 显示缩放自己适配：100% 到 225% 都实测过（见下方常见问题）。
 - 自带所有地图的图片和高度图；弹药数据第一次用时自动下载，之后自己保持最新。
 - 占用不高：我们实测的对局里约 0.15 到 0.3 个 CPU 核心，内存 100 到 200 MB。
@@ -85,7 +87,7 @@
 
 - 游戏设置的 GUNNER 一节这样设：Align action bar 选 Center，Action bar color 是 #F0B74A，Hide minimap when aiming 选 OFF，Weapon selection layout 选 Horizontal，Keep action bar expanded while loading 选 ON。
 - 关掉 Roblox 的自动翻译，游戏界面保持英文。
-- 不要装替换游戏字体的字体包；Roblox 设置里的“文本大小”保持默认。
+- 不要装替换游戏字体的字体包。Roblox 设置里的“文本大小”保持默认或调大一格；再大两格时游戏会把自己的字截短，计算器读不出来。
 - Roblox 以管理员身份运行时，计算器也要以管理员身份运行。
 
 第一次启动时会问你愿不愿意分享匿名统计数据，用来把计算器调得更准。你不点同意就不会发，之后也随时可以在设置里改（面板上的齿轮）。
@@ -123,7 +125,7 @@
 <details>
 <summary><b>出问题了怎么反馈？</b></summary>
 <br>
-打开设置，在“Problem report”下点“Create report”，把打开的文件夹附到 GitHub Issue 里。如果问题是看得见的，勾上“Screenshots”；截图里的玩家名字会被涂黑。
+打开设置，在“Problem report”下点“Create report”，把它选中的那个 zip 附到 GitHub Issue 里（QQ 里直接拖这个 zip）。如果问题是看得见的，勾上“Screenshots”；截图里的玩家名字会被涂黑。
 </details>
 
 ## 从源码构建

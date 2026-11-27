@@ -1,11 +1,14 @@
 {
- "source": "The MTC wiki data's vehicles.json and placeables.json (production 1.0.0), built the way mtc_ammo::WeaponTable builds it from a fresh download",
+ "source": "tools/artillery_weapons.py over reference/wiki/production-1.0.0/20261117/vehicles.json, reference/wiki/production-1.0.0/20261117/placeables.json",
  "weapons": [
   {
    "name": "105mm M2A1",
    "wiki_elevation": [
     -5,
     35
+   ],
+   "vehicles": [
+    "M7 Priest"
    ]
   },
   {
@@ -13,6 +16,9 @@
    "wiki_elevation": [
     -20,
     15
+   ],
+   "vehicles": [
+    "M120/Soltam K6"
    ]
   },
   {
@@ -20,6 +26,10 @@
    "wiki_elevation": [
     -5,
     45
+   ],
+   "vehicles": [
+    "122mm D-30",
+    "T-34-122"
    ]
   },
   {
@@ -27,6 +37,10 @@
    "wiki_elevation": [
     -15,
     55
+   ],
+   "vehicles": [
+    "BM-21 Grad",
+    "LUAZ-672"
    ]
   },
   {
@@ -34,6 +48,9 @@
    "wiki_elevation": [
     -7,
     40
+   ],
+   "vehicles": [
+    "Pz.W.42"
    ]
   },
   {
@@ -41,6 +58,9 @@
    "wiki_elevation": [
     -5,
     45
+   ],
+   "vehicles": [
+    "SAU-2"
    ]
   },
   {
@@ -48,6 +68,9 @@
    "wiki_elevation": [
     -3,
     52
+   ],
+   "vehicles": [
+    "2S19 Msta-S"
    ]
   },
   {
@@ -55,6 +78,10 @@
    "wiki_elevation": [
     -3,
     70
+   ],
+   "vehicles": [
+    "2S19 Msta-S",
+    "2S43"
    ]
   },
   {
@@ -62,6 +89,9 @@
    "wiki_elevation": [
     -2.5,
     65
+   ],
+   "vehicles": [
+    "PzH 2000"
    ]
   },
   {
@@ -69,6 +99,9 @@
    "wiki_elevation": [
     -3,
     75
+   ],
+   "vehicles": [
+    "M109"
    ]
   },
   {
@@ -76,6 +109,9 @@
    "wiki_elevation": [
     -3,
     75
+   ],
+   "vehicles": [
+    "M109A6"
    ]
   },
   {
@@ -83,6 +119,9 @@
    "wiki_elevation": [
     -0.01,
     60
+   ],
+   "vehicles": [
+    "2S7 Pion"
    ]
   },
   {
@@ -90,6 +129,9 @@
    "wiki_elevation": [
     -7,
     45
+   ],
+   "vehicles": [
+    "RBU-6000 MT-LB"
    ]
   },
   {
@@ -97,6 +139,9 @@
    "wiki_elevation": [
     -1,
     45
+   ],
+   "vehicles": [
+    "TOS-1A BM-1"
    ]
   },
   {
@@ -104,6 +149,9 @@
    "wiki_elevation": [
     0,
     45
+   ],
+   "vehicles": [
+    "M270 MLRS"
    ]
   },
   {
@@ -111,6 +159,11 @@
    "wiki_elevation": [
     -4,
     74
+   ],
+   "vehicles": [
+    "BMP-2M",
+    "BTR-90",
+    "T-62 Berezhok"
    ]
   },
   {
@@ -118,6 +171,17 @@
    "wiki_elevation": [
     -15,
     45
+   ],
+   "vehicles": [
+    "AGS-17",
+    "BMP-1TS",
+    "BMP-30M",
+    "BMPT Spyridon",
+    "BTR-4",
+    "Chonma-20",
+    "GAZ Tigr M",
+    "Object 781",
+    "T-64E"
    ]
   },
   {
@@ -125,6 +189,9 @@
    "wiki_elevation": [
     -1,
     72
+   ],
+   "vehicles": [
+    "Sturmtiger"
    ]
   },
   {
@@ -132,6 +199,12 @@
    "wiki_elevation": [
     -15,
     45
+   ],
+   "vehicles": [
+    "Ariete PSO",
+    "CV 9040C",
+    "Humvee",
+    "M1117 ASV"
    ]
   },
   {
@@ -139,6 +212,12 @@
    "wiki_elevation": [
     -25,
     60
+   ],
+   "vehicles": [
+    "Merkava Mk.1B",
+    "Merkava Mk.4M",
+    "Namer 30",
+    "Namer APC"
    ]
   },
   {
@@ -146,6 +225,9 @@
    "wiki_elevation": [
     -12.5,
     32.5
+   ],
+   "vehicles": [
+    "Mortar"
    ]
   },
   {
@@ -153,6 +235,9 @@
    "wiki_elevation": [
     -10,
     25
+   ],
+   "vehicles": [
+    "M4A1 M17 Whizbang"
    ]
   },
   {
@@ -160,6 +245,9 @@
    "wiki_elevation": [
     -1.16,
     85
+   ],
+   "vehicles": [
+    "82mm 2B9 Vasilek"
    ]
   },
   {
@@ -167,6 +255,9 @@
    "wiki_elevation": [
     -9,
     85
+   ],
+   "vehicles": [
+    "CS/SA5"
    ]
   },
   {
@@ -174,6 +265,10 @@
    "wiki_elevation": [
     -10,
     18
+   ],
+   "vehicles": [
+    "Centurion Mk.5 AVRE",
+    "Churchill AVRE"
    ]
   },
   {
@@ -181,6 +276,10 @@
    "wiki_elevation": [
     -10,
     25
+   ],
+   "vehicles": [
+    "M26 T99",
+    "M4A2 T34 Calliope"
    ]
   },
   {
@@ -188,6 +287,9 @@
    "wiki_elevation": [
     -1,
     70
+   ],
+   "vehicles": [
+    "Karl-Gerät"
    ]
   },
   {
@@ -195,6 +297,9 @@
    "wiki_elevation": [
     -30,
     30
+   ],
+   "vehicles": [
+    "HellCannon"
    ]
   },
   {
@@ -202,6 +307,10 @@
    "wiki_elevation": [
     -1,
     45
+   ],
+   "vehicles": [
+    "RSZO-1",
+    "RSZO-2"
    ]
   },
   {
@@ -209,6 +318,9 @@
    "wiki_elevation": [
     -25,
     0
+   ],
+   "vehicles": [
+    "9K720 Iskander"
    ]
   },
   {
@@ -216,6 +328,9 @@
    "wiki_elevation": [
     -8,
     33
+   ],
+   "vehicles": [
+    "RBT-5"
    ]
   },
   {
@@ -223,6 +338,10 @@
    "wiki_elevation": [
     -7,
     45
+   ],
+   "vehicles": [
+    "Strela-MLRS",
+    "UB-32"
    ]
   }
  ]

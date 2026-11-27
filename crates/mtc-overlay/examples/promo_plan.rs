@@ -60,6 +60,9 @@ fn main() {
         hover: None,
         shell: Some("3OF61".into()),
         loaded_charge: Some(("Low".into(), 0)),
+        shell_kind: None,
+        menu: None,
+        charge_manual: None,
         load: PanelLoad::Loaded,
         next: PlanNext::Ready,
         detail: Some(if objective_b {

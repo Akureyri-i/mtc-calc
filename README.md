@@ -67,6 +67,8 @@ MTC Calculator sits on top of Roblox while you crew the artillery in [Multicrew 
 
 - Recognises the map and your gun's position by itself; open the full map once and it is set.
 - Draws the predicted landing point on the map, and spots where each shell actually lands.
+- If it reads your shell, charge or gun wrong (or not at all), click the SHELL or CHARGE line on the panel and pick it yourself; the pick stays with that slot until you choose Auto.
+- Works on a private server's debug map too: choose it under Map in the settings.
 - Adapts to the window size and the Windows display scaling: tried from 100 % to 225 % (see the questions below).
 - Comes with every map's pictures and heightmaps; downloads ammunition data on first use and keeps it up to date.
 - Light on your PC: 0.15 to 0.3 of one CPU core and 100 to 200 MB of memory in the matches we measured.
@@ -85,7 +87,7 @@ The calculator reads the game as it looks out of the box, so:
 
 - In the game's settings, set the GUNNER section to: Align action bar Center, Action bar color #F0B74A, Hide minimap when aiming OFF, Weapon selection layout Horizontal, Keep action bar expanded while loading ON.
 - Turn off Roblox's automatic translation and keep the game in English.
-- Don't use a font pack that replaces the game's fonts, and leave Text Size in Roblox's settings at its default.
+- Don't use a font pack that replaces the game's fonts. Leave Text Size in Roblox's settings at its default or one step up; at the two larger steps the game cuts its own text short and the calculator cannot read it.
 - If Roblox runs as administrator, run the calculator as administrator too.
 
 On first start it asks whether you want to share anonymous statistics that help tune the calculator. It is off unless you say yes, and you can change it any time in the settings (the gear on the panel).
@@ -123,7 +125,7 @@ Windows shows this for programs that are not signed with a paid certificate, whi
 <details>
 <summary><b>Something looks wrong. How do I report it?</b></summary>
 <br>
-Open the settings, choose <i>Create report</i> under Problem report, and attach the folder it opens to a GitHub issue. Tick <i>Screenshots</i> if the problem is something you can see; player names are blacked out.
+Open the settings, choose <i>Create report</i> under Problem report, and attach the zip it selects to a GitHub issue. Tick <i>Screenshots</i> if the problem is something you can see; player names are blacked out.
 </details>
 
 ## Building from source

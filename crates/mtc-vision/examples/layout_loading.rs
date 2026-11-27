@@ -8,7 +8,8 @@
 //! `MTC_PER_FRAME` one line per frame; `MTC_BAR_SWEEP` instead counts, per configuration, the
 //! frames whose bar layout reads at each header text scale of a grid; `MTC_TEXT_SWEEP=<weapon>`
 //! counts the frames whose weapon label names that data weapon at each weapon-label text scale;
-//! `MTC_GLYPHS=<dir>` reads text off the reference with the glyph files there
+//! `MTC_GLYPHS=<dir>` reads text off the reference with the glyph files there (`MTC_GLYPHS_ALL`: at
+//! the reference configuration too)
 //! (`<dpi>_<width>_<height>.json`, `crates/mtc-overlay/examples/ui_glyphs_json.rs`);
 //! `MTC_LABEL_CSV=<file>` appends per frame the weapon box's free reading and best two whole-label
 //! matches against the data's labels; `MTC_FREE_LABEL` reads the label glyph by glyph only.
@@ -129,7 +130,7 @@ fn main() {
             // As the HUD: the label, the cards compared with what the label's weapons can show, the
             // weapon told by label and cards.
             let text = match &glyph_dir {
-                Some(dir) if !placement.is_reference() => &*glyph_readers.entry(key).or_insert_with(|| {
+                Some(dir) if !placement.is_reference() || std::env::var_os("MTC_GLYPHS_ALL").is_some() => &*glyph_readers.entry(key).or_insert_with(|| {
                     let path = std::path::Path::new(dir).join(format!("{}_{}_{}.json", key.0, key.1, key.2));
                     TextReader::from_json(&std::fs::read_to_string(&path).expect("glyph file for this configuration"))
                 }),

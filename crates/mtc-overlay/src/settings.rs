@@ -36,7 +36,7 @@ use crate::window;
 /// Window size at 150 % display scaling (physical pixels; `SettingsState::scale` times this on
 /// screen).
 pub const WIDTH: i32 = 880;
-const HEIGHT: i32 = 1160;
+const HEIGHT: i32 = 1236;
 const PAD: f32 = 32.0;
 const HEADER_H: f32 = 64.0;
 /// A section's caption, with the space above it.
@@ -150,6 +150,8 @@ pub enum Setting {
     Share(bool),
     /// Put screenshots of what the HUD reads into a problem report.
     ReportShots(bool),
+    /// Take the private server's debug map as the map until a real one is identified.
+    DebugMap(bool),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -172,6 +174,8 @@ pub struct SettingsState {
     pub share: bool,
     /// A problem report gets screenshots of what the HUD reads.
     pub report_shots: bool,
+    /// The debug map is taken as the map (until a real one is identified).
+    pub debug_map: bool,
     /// What the last problem report did (where it was saved), shown under its row.
     pub report_note: Option<String>,
     /// The screen's display scaling over 150 %, at most 1.
@@ -614,6 +618,13 @@ impl SettingsWindow {
         // Map.
         self.caption(y, "MAP");
         y += CAPTION_H;
+        self.named(y, "Map", "The debug map of a private server: used until a real map is recognised.", right - 300.0);
+        self.cells(right - 300.0, y + ROW_H / 2.0, 150.0, &[
+            ("Auto", !state.debug_map, PanelAction::Set(Setting::DebugMap(false))),
+            ("Debug map", state.debug_map, PanelAction::Set(Setting::DebugMap(true))),
+        ], false)?;
+        y += ROW_H;
+        rule(&self.surface, y);
         self.named(y, "Predicted impact", "Where the loaded shell lands at the gun's current angles.", right - 240.0);
         self.cells(right - 240.0, y + ROW_H / 2.0, 120.0, &[("Show", state.pred, PanelAction::Set(Setting::Pred(true))), ("Hide", !state.pred, PanelAction::Set(Setting::Pred(false)))], false)?;
         y += ROW_H;

@@ -284,6 +284,10 @@ pub struct ArtilleryWeapon {
     /// The turrets' vertical traverse (degrees, relative to the hull; the widest over all mounts).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wiki_elevation: Option<(f64, f64)>,
+    /// The vehicles and placeables that carry it (the wiki's entity names), for picking a gun by
+    /// hand.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vehicles: Vec<String>,
 }
 
 static WEAPON_TABLE: std::sync::OnceLock<WeaponTable> = std::sync::OnceLock::new();
@@ -300,15 +304,19 @@ impl WeaponTable {
     /// vertical traverse of every `Turret` module that lists it.
     pub fn from_wiki(sources: &[&str]) -> Result<Self, String> {
         use serde_json::Value;
-        fn modules<'a>(node: &'a Value, out: &mut Vec<&'a serde_json::Map<String, Value>>) {
+        // Every module table with the entity it belongs to: the key the entity stands under (its
+        // alterations' tables count as the entity's).
+        type Table<'a> = (Option<&'a str>, &'a serde_json::Map<String, Value>);
+        fn modules<'a>(node: &'a Value, owner: Option<&'a str>, out: &mut Vec<Table<'a>>) {
             match node {
                 Value::Object(map) => {
+                    let entity = matches!(map.get("modules"), Some(Value::Object(_)));
                     if let Some(Value::Object(m)) = map.get("modules") {
-                        out.push(m);
+                        out.push((owner, m));
                     }
-                    map.values().for_each(|v| modules(v, out));
+                    map.iter().for_each(|(k, v)| modules(v, if entity { owner } else { Some(k.as_str()) }, out));
                 }
-                Value::Array(list) => list.iter().for_each(|v| modules(v, out)),
+                Value::Array(list) => list.iter().for_each(|v| modules(v, owner, out)),
                 _ => {}
             }
         }
@@ -329,14 +337,18 @@ impl WeaponTable {
         }
         let mut flagged = BTreeMap::<String, bool>::new();
         let mut limits = BTreeMap::<String, (f64, f64)>::new();
+        let mut carriers = BTreeMap::<String, std::collections::BTreeSet<String>>::new();
         for source in sources {
             let root: Value = serde_json::from_str(source).map_err(|e| e.to_string())?;
             let mut found = Vec::new();
-            modules(&root, &mut found);
-            for table in found {
+            modules(&root, None, &mut found);
+            for (owner, table) in found {
                 for module in table.values() {
                     if let Some(name) = weapon_name(module) {
-                        *flagged.entry(name).or_default() |= truthy(module["data"].get("artillery"));
+                        *flagged.entry(name.clone()).or_default() |= truthy(module["data"].get("artillery"));
+                        if let Some(owner) = owner {
+                            carriers.entry(name).or_default().insert(owner.to_owned());
+                        }
                     }
                 }
                 for module in table.values() {
@@ -356,7 +368,7 @@ impl WeaponTable {
         let weapons: Vec<ArtilleryWeapon> = flagged
             .into_iter()
             .filter(|(_, artillery)| *artillery)
-            .map(|(name, _)| ArtilleryWeapon { wiki_elevation: limits.get(&name).copied(), name })
+            .map(|(name, _)| ArtilleryWeapon { wiki_elevation: limits.get(&name).copied(), vehicles: carriers.get(&name).map(|v| v.iter().cloned().collect()).unwrap_or_default(), name })
             .collect();
         if weapons.is_empty() {
             return Err("no weapon flagged artillery".into());
@@ -374,6 +386,16 @@ impl WeaponTable {
     pub fn current() -> &'static WeaponTable {
         WEAPON_TABLE.get_or_init(Self::compiled)
     }
+}
+
+/// The vehicles and placeables that carry an artillery weapon (none known: empty).
+pub fn carriers(weapon: &str) -> &'static [String] {
+    WeaponTable::current().weapons.iter().find(|w| w.name == weapon).map_or(&[], |w| w.vehicles.as_slice())
+}
+
+/// The calibre (mm) a weapon name or label names ("155mm M185", "L9A1 165mm").
+pub fn calibre(name: &str) -> Option<u32> {
+    calibre_and_model(name).map(|(c, _)| c)
 }
 
 /// Whether `weapon` (the data's name, as decided from the label and the cards) is an artillery
@@ -462,7 +484,7 @@ impl AmmoData {
 
     /// The weapon a label on screen names.
     pub fn weapon_for_label(&self, label: &str) -> Option<&str> {
-        let (calibre, model) = calibre_and_model(label)?;
+        let Some((calibre, model)) = calibre_and_model(label) else { return self.named_whole(label) };
         // Same calibre; the model closest by edit distance (the whole model, not a prefix).
         let scored: Vec<(usize, &str)> = self
             .weapons
@@ -484,7 +506,7 @@ impl AmmoData {
     /// calibre within one error more than `weapon_for_label` allows compete; the one with the most
     /// cards among its shells wins, then the closest model.
     pub fn weapon_for_label_and_cards(&self, label: &str, cards: &[&str]) -> Option<&str> {
-        let (calibre, model) = calibre_and_model(label)?;
+        let Some((calibre, model)) = calibre_and_model(label) else { return self.named_whole(label) };
         let allowed = allowed_errors(&model) + 1;
         let mut scored: Vec<(usize, usize, &str)> = self
             .weapons
@@ -514,10 +536,31 @@ impl AmmoData {
         }
     }
 
+    /// The weapon a label without a calibre names: one of the weapons the data names without a
+    /// calibre in millimetres (the game shows such a name as it is: "Rocketetet" for the RSZO's
+    /// rockets), compared whole within the read tolerance, when one is closest. Guided missiles
+    /// are left out: no ballistic solution fits them.
+    fn named_whole(&self, label: &str) -> Option<&str> {
+        let read = label.trim();
+        let length = |t: &str| t.chars().filter(|c| *c != ' ').count();
+        if length(read) < 4 {
+            return None;
+        }
+        let scored: Vec<(usize, &str)> = self
+            .weapons
+            .iter()
+            .filter(|(name, shells)| calibre_and_model(name).is_none() && !shells.iter().all(|s| s.kind.contains("MISSILE")))
+            .map(|(name, _)| (prefix_distance(name, read) + length(name).saturating_sub(length(read)), name.as_str()))
+            .collect();
+        let best = scored.iter().map(|s| s.0).min()?;
+        let winners: Vec<&str> = scored.iter().filter(|s| s.0 == best).map(|s| s.1).collect();
+        (best <= allowed_errors(read) && winners.len() == 1).then(|| winners[0])
+    }
+
     /// The weapons a label can name: its calibre, the model within one error more than
     /// `weapon_for_label` allows (a conversion's weapon is a letter apart from the original's).
     pub fn label_weapons(&self, label: &str) -> Vec<&str> {
-        let Some((calibre, model)) = calibre_and_model(label) else { return Vec::new() };
+        let Some((calibre, model)) = calibre_and_model(label) else { return self.named_whole(label).into_iter().collect() };
         let allowed = allowed_errors(&model) + 1;
         let mut out: Vec<&str> = self
             .weapons
@@ -612,7 +655,14 @@ impl AmmoData {
                 _ if *t == "mm" && i > 0 && is_calibre(tokens[i - 1]) => Some((tokens[i - 1], i - 1, i + 1)),
                 _ => None,
             });
-            let Some((calibre, from, to)) = found else { continue };
+            let Some((calibre, from, to)) = found else {
+                // Shown as the data writes it: the artillery among them, not guided missiles.
+                let missiles = self.weapons[name].iter().all(|s| s.kind.contains("MISSILE"));
+                if calibre_and_model(name).is_none() && is_artillery_weapon(name) && !missiles && !out.contains(name) {
+                    out.push(name.clone());
+                }
+                continue;
+            };
             let model: Vec<&str> = tokens[..from].iter().chain(&tokens[to..]).copied().collect();
             if model.is_empty() {
                 continue;
@@ -764,6 +814,26 @@ mod tests {
         let read =|f: &str| std::fs::read_to_string(format!("{snapshot}/{f}")).expect(f);
         let (vehicles, placeables) = (read("vehicles.json"), read("placeables.json"));
         assert_eq!(WeaponTable::from_wiki(&[&vehicles, &placeables]).expect("table"), WeaponTable::compiled());
+    }
+
+    /// Weapons the data names without a calibre are read by their whole name (the RSZO's
+    /// "Rocketetet", once misread "Rocketotet"); a guided missile is not decided.
+    #[test]
+    fn weapons_named_without_a_calibre_are_matched_whole() {
+        let path = "../../reference/wiki/production-1.0.0/20261117/shells.json";
+        let Ok(json) = std::fs::read_to_string(path) else {
+            eprintln!("skipped: the wiki data snapshot is not on this machine");
+            return;
+        };
+        let data = AmmoData::from_json(&json).expect("shells");
+        for label in ["Rocketetet", "Rocketotet", "Rocket etet"] {
+            assert_eq!(data.weapon_for_label_and_cards(label, &[]), Some("Rocketetet"), "{label}");
+        }
+        assert_eq!(data.weapon_for_label("TT-250 Tank Torpedo"), Some("TT-250 Tank Torpedo"));
+        assert_eq!(data.weapon_for_label_and_cards("FB-10A", &[]), None, "a guided missile");
+        assert_eq!(data.weapon_for_label("155 mm M185"), Some("155mm M185"), "calibres as before");
+        let labels = data.label_texts();
+        assert!(labels.iter().any(|l| l == "Rocketetet") && !labels.iter().any(|l| l == "FB-10A"));
     }
 
     #[test]

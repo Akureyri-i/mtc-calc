@@ -76,6 +76,8 @@ fn main() {
         precision,
     };
     let (low, medium, high) = (("Low", 0u8), ("Medium", 1u8), ("High", 2u8));
+    // Picked by hand in the shell list: the M110 smoke shell.
+    let manual = matches!(args.iter().position(|a| a == "--menu").and_then(|i| args.get(i + 1)).map(String::as_str), Some("manual" | "manual-open"));
     let boxed = |name: &str, index: u8, band: (f32, f32), t: Option<f64>, loaded: bool, planned: bool| PlanChargeBox { name: name.into(), index, band_km: Some(band), time_s: t, loaded, planned };
     // Docked as live: 64 px right of the full map (client x 839 + 882), top on its top (y 226).
     let state = PlanState {
@@ -95,8 +97,11 @@ fn main() {
         ],
         selected: Some("A3".into()),
         hover: None,
-        shell: Some("3OF45 Proxy".into()),
+        shell: Some(if manual { "M110" } else { "M107" }.into()),
         loaded_charge: Some(("Low".into(), 0)),
+        shell_kind: Some(if manual { "SMOKE" } else { "HE" }.into()),
+        menu: menu_state(args.iter().position(|a| a == "--menu").and_then(|i| args.get(i + 1)).map(String::as_str)),
+        charge_manual: args.iter().any(|a| a == "--menu").then(|| args.iter().any(|a| a == "--charge-manual")),
         load: PanelLoad::Loaded,
         next: PlanNext::Load("Medium".into(), 1),
         detail: Some(PlanDetail {
@@ -129,6 +134,9 @@ fn main() {
     let layer = render_plan(&fonts, &state).expect("render");
     composite(&mut image, &layer);
     image.save_png(Path::new(&args[1])).expect("save");
+    if args.iter().any(|a| a == "--menu") {
+        return;
+    }
 
     // The terrain section's states, on the same frame.
     let d = 3467.0;
@@ -190,4 +198,24 @@ fn main() {
         composite(&mut image, &layer);
         image.save_png(Path::new(&format!("{}_{name}.png", stem.display()))).expect("save");
     }
+}
+
+/// The shell list in one of its states (`--menu closed|open|manual-open|manual`), as the gunner's
+/// panel shows it: the M109's shells, the slot read as M107, or picked by hand as M110.
+fn menu_state(which: Option<&str>) -> Option<mtc_overlay::PanelMenu> {
+    use mtc_overlay::{MenuItem, MenuPick, PanelMenu};
+    let shells = |manual: bool| {
+        let mut items = vec![MenuItem { label: "Auto".into(), kind: None, detail: Some("read M107".into()), current: !manual, pick: MenuPick::Auto }];
+        for (name, kind) in [("M107", "HE"), ("M107 VT", "TIME FUZE"), ("M107 PF", "PROXIMITY FUZE"), ("M110", "SMOKE")] {
+            items.push(MenuItem { label: name.into(), kind: Some(kind.into()), detail: None, current: manual && name == "M110", pick: MenuPick::Shell(name.into()) });
+        }
+        items
+    };
+    Some(match which? {
+        "closed" => PanelMenu { open: false, items: shells(false), manual: false },
+        "open" => PanelMenu { open: true, items: shells(false), manual: false },
+        "manual-open" => PanelMenu { open: true, items: shells(true), manual: true },
+        "manual" => PanelMenu { open: false, items: shells(true), manual: true },
+        other => panic!("--menu {other}: closed, open, manual-open or manual"),
+    })
 }

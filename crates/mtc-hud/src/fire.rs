@@ -382,7 +382,8 @@ impl FireControl {
     /// map or a shell, while the heights load, or off the map. The landing prediction fires from
     /// the solution's gun; the shot log from the arrow at the moment of the shot.
     pub fn landing_from(&self, gun: (f64, f64), (elevation, azimuth): (f64, f64)) -> Option<Prediction> {
-        let (map, pick) = (self.map?, self.shell.as_ref()?);
+        // Not with the charge unknown: which charge flies is not known.
+        let (map, pick) = (self.map?, self.shell.as_ref().filter(|p| p.charge_known)?);
         let guard = self.heights.lock().expect("heights lock");
         let heights = match &guard.1 {
             Heights::Loading => return None,
@@ -793,7 +794,9 @@ impl FireControl {
             _ => 0.0,
         };
         let level = |c: ChargeLevel| ChargeLevel::ALL.iter().position(|&l| l == c).unwrap_or(0) as i32;
-        let loaded_charge = self.shell.as_ref().and_then(|p| p.shell.charge());
+        let loaded_charge = self.shell.as_ref().and_then(|p| p.loaded_charge());
+        // The loaded charge not known: no arcs of its own, the plan's charge stands for it.
+        let charge_known = self.shell.as_ref().is_none_or(|p| p.charge_known);
         let loaded = loaded_charge.map(level);
         let choices = self.arcs_chosen.clone();
         // The reaching charge of the family closest to the loaded one (of two as close, the
@@ -874,7 +877,7 @@ impl FireControl {
                 let clear = |p: &PlanCharge| !p.auto || (if p.high_chosen { p.high_blocked } else { p.low_blocked }).is_none();
                 let (plan, stopped_plan) = match &current {
                     Some((own, family)) => {
-                        let loaded_plan = if low.is_some() || high.is_some() { plan_with(own, loaded_charge, low, high, true) } else { None };
+                        let loaded_plan = if charge_known && (low.is_some() || high.is_some()) { plan_with(own, loaded_charge, low, high, true) } else { None };
                         match loaded_plan {
                             Some(p) if clear(&p) => (Some(p), None),
                             stopped => {
@@ -898,6 +901,7 @@ impl FireControl {
                     }
                     None => (None, None),
                 };
+                let (low, high) = if charge_known { (low, high) } else { plan.as_ref().map_or((None, None), |p| (p.low, p.high)) };
                 (a.clone(), Solution { distance_m, height_m, azimuth, low, high, plan, stopped: stopped_plan })
             })
             .collect();

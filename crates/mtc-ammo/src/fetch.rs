@@ -73,7 +73,18 @@ pub fn download_weapons() -> io::Result<bool> {
 
 /// The cached weapon table, when there is one that reads.
 pub fn load_weapons() -> Option<WeaponTable> {
-    serde_json::from_str(&std::fs::read_to_string(weapons_path()).ok()?).ok()
+    let table: WeaponTable = serde_json::from_str(&std::fs::read_to_string(weapons_path()).ok()?).ok()?;
+    // A table built before it listed the vehicles: built again from the downloaded data.
+    if table.weapons.iter().all(|w| w.vehicles.is_empty()) {
+        let read = |file: &str| std::fs::read_to_string(cache_dir().join(file));
+        if let (Ok(vehicles), Ok(placeables)) = (read(VEHICLES), read(PLACEABLES))
+            && let Ok(fresh) = WeaponTable::from_wiki(&[&vehicles, &placeables])
+        {
+            let _ = write_whole(&weapons_path(), serde_json::to_string_pretty(&fresh).expect("weapon table").as_bytes());
+            return Some(fresh);
+        }
+    }
+    Some(table)
 }
 
 /// Fetches `file` from the service into the cache unless the cached copy is the service's current

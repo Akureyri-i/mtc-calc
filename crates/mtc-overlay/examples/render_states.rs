@@ -47,6 +47,9 @@ fn panels() -> Vec<(&'static str, PanelState)> {
         locked: true,
         settings_open: false,
         scale: 1.0,
+        menu: None,
+        shell_kind: None,
+        charge_menu: None,
     };
     let empty = PanelState {
         targets: vec![target("A", true, true), target("B", true, true), target("C", true, true)],
@@ -201,6 +204,9 @@ fn main() {
         hover: Some("A1".into()),
         shell: Some("M107".into()),
         loaded_charge: Some(("Low".into(), 0)),
+        shell_kind: None,
+        charge_manual: None,
+        menu: None,
         load: PanelLoad::Loaded,
         next: PlanNext::Load("High".into(), 2),
         detail: Some(PlanDetail {

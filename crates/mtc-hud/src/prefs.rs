@@ -62,6 +62,8 @@ pub struct Prefs {
     pub consent_never: bool,
     /// A problem report gets screenshots of what the HUD reads.
     pub report_screenshots: bool,
+    /// The debug map is taken as the map until a real one is identified (then back to automatic).
+    pub debug_map: bool,
     /// `DEFAULTS_VERSION` when the file was written (0: before it existed, so a file without it
     /// reads 0, not the new default's version).
     #[serde(default)]
@@ -76,6 +78,7 @@ impl Default for Prefs {
             consent_version: 0,
             consent_never: false,
             report_screenshots: false,
+            debug_map: false,
             panel_gunner_offset: None,
             panel_loader_offset: None,
             panel_gunner: None,
@@ -144,6 +147,7 @@ impl Prefs {
                 }
             }
             Setting::ReportShots(on) => self.report_screenshots = on,
+            Setting::DebugMap(on) => self.debug_map = on,
             Setting::Step(stepper, steps) => match (stepper, self.tolerance_mode) {
                 (Stepper::Elevation, ToleranceMode::Angle) => self.tolerance_angle.0 = stepped(self.tolerance_angle.0, steps, ANGLE),
                 (Stepper::Azimuth, ToleranceMode::Angle) => self.tolerance_angle.1 = stepped(self.tolerance_angle.1, steps, ANGLE),
@@ -176,6 +180,7 @@ impl Prefs {
         m.insert("map_labels", format!("{:?}", self.map_labels));
         m.insert("drag_offset_ms", self.drag_offset_ms.to_string());
         m.insert("panel_moved", (self.panel_gunner_offset.is_some() || self.panel_loader_offset.is_some()).to_string());
+        m.insert("debug_map", self.debug_map.to_string());
         m
     }
 
@@ -198,6 +203,7 @@ impl Prefs {
             limits: [elevation, azimuth, (self.drag_offset_ms <= DRAG.0, self.drag_offset_ms >= DRAG.1)],
             share: self.sharing(),
             report_shots: self.report_screenshots,
+            debug_map: self.debug_map,
             report_note,
             scale,
         }

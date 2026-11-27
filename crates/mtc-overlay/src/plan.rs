@@ -37,7 +37,7 @@ fn scaled(height: i32, scale: f32) -> (i32, i32) {
 }
 /// The card grows past `MAX_HEIGHT` rather than cut anything off, up to this (it docks 226 px down
 /// a 1334 px client area).
-const LIMIT_HEIGHT: i32 = 1100;
+pub const LIMIT_HEIGHT: i32 = 1100;
 /// Rows shrink to this before the card reaches `LIMIT_HEIGHT`.
 const ROW_TIGHT: f32 = 24.0;
 const PAD: f32 = 16.0;
@@ -67,6 +67,9 @@ const PROFILE_FLAT_RELIEFS: f32 = 2.0;
 const PROFILE_HEADROOM: f32 = 0.12;
 /// The shell row alone (no target selected).
 const SHELL_H: f32 = 42.0;
+/// A row of the shell list, opened under the SHELL row; the list's top margin.
+const MENU_ROW_H: f32 = 34.0;
+const MENU_TOP: f32 = 40.0;
 const GUN_H: f32 = 52.0;
 /// Columns: the name's centre, the distance's right edge, the charge, the flight time, the
 /// precision's right edge.
@@ -215,7 +218,14 @@ pub struct PlanState {
     /// Name of the current shell without its charge, the loaded charge (name, colour index) and
     /// the loading state.
     pub shell: Option<String>,
+    /// The shell's data `type` ("TIME FUZE"): the game's icon before its name.
+    pub shell_kind: Option<String>,
     pub loaded_charge: Option<(String, u8)>,
+    /// The shell list behind the SHELL row (`None`: no ammunition data to list).
+    pub menu: Option<crate::panel::PanelMenu>,
+    /// The charge boxes set this shot's charge on a click (`None`: they do not); `Some(true)`: the
+    /// loaded charge was set so.
+    pub charge_manual: Option<bool>,
     pub load: PanelLoad,
     pub next: PlanNext,
     pub detail: Option<PlanDetail>,
@@ -273,6 +283,8 @@ pub struct PlanWindow {
     /// The row the pointer was last reported over.
     hover_row: Option<String>,
     press: Option<(i32, i32)>,
+    /// The largest scale the window's surface holds the card at (made bigger when a card needs it).
+    capacity: f32,
 }
 
 /// Colour of a charge index.
@@ -290,8 +302,7 @@ impl PlanWindow {
 
     /// The card drawn offscreen where it would show.
     pub fn render_offscreen(graphics: &Rc<Graphics>, state: &PlanState) -> windows::core::Result<crate::Layer> {
-        // Big enough for the card at its scale (live cards stay at 1 or below; renders for
-        // pictures go above).
+        // Big enough for the card at its scale.
         let (surface_w, surface_h) = scaled(LIMIT_HEIGHT, state.scale.max(1.0));
         let mut window = Self::with_surface(HWND::default(), Surface::offscreen(graphics, surface_w as u32, surface_h as u32)?)?;
         let (w, height) = scaled(window.draw(state)?, state.scale);
@@ -329,7 +340,7 @@ impl PlanWindow {
             tag_right: font(12.0, bold, r)?,
             button: font(14.0, bold, c)?,
         };
-        Ok(Self { hwnd, surface, fonts, shown: None, placed: None, hover: None, hits: Vec::new(), hover_row: None, press: None })
+        Ok(Self { hwnd, surface, fonts, shown: None, placed: None, hover: None, hits: Vec::new(), hover_row: None, press: None, capacity: 1.0 })
     }
 
     pub fn hwnd(&self) -> HWND {
@@ -358,6 +369,13 @@ impl PlanWindow {
         };
         if self.shown.as_ref() == Some(state) {
             return Ok(());
+        }
+        // A card drawn above the surface's scale (the game's HUD is larger than at the reference):
+        // the surface made big enough first.
+        if state.scale > self.capacity {
+            let (w, h) = scaled(LIMIT_HEIGHT, state.scale);
+            self.surface.resize_window((w as u32, h as u32))?;
+            self.capacity = state.scale;
         }
         let (width, height) = scaled(self.draw(state)?, state.scale);
         let at = (state.at.0, state.at.1, height);
@@ -440,7 +458,12 @@ impl PlanWindow {
         } else if state.shell.is_some() {
             h += SHELL_H;
         }
-        h
+        h + Self::menu_height(state)
+    }
+
+    /// The open shell list's height (it pushes what is under the SHELL row down).
+    fn menu_height(state: &PlanState) -> f32 {
+        state.menu.as_ref().filter(|m| m.open && (state.shell.is_some() || state.detail.is_some())).map_or(0.0, |m| MENU_ROW_H * m.items.len() as f32 + 8.0)
     }
 
     /// Rows shrink (to `ROW_MIN`) to keep the card within the map's height, and further (to
@@ -821,16 +844,38 @@ impl PlanWindow {
         if state.shell.is_some() || state.detail.is_some() {
             let cy = y + 21.0;
             self.txt("SHELL", &f.title, PAD, w, cy, p.grey);
-            let x = VALUE_X;
+            let mut x = VALUE_X;
+            let value_box = rect(VALUE_X - 8.0, y + 5.0, w - 100.0, y + 37.0);
+            if state.menu.as_ref().is_some_and(|m| m.open) || (state.menu.is_some() && self.hovered(&value_box)) {
+                s.fill_rect(value_box, p.hover);
+            }
+            let mut end;
             if let Some(shell) = &state.shell {
+                if let Some(icon) = state.shell_kind.as_deref().and_then(crate::shell_icons::for_kind) {
+                    s.image(icon, crate::shell_icons::SIDE, rect(x - 2.0, cy - 13.0, x + 24.0, cy + 13.0))?;
+                    x += 30.0;
+                }
                 self.txt(shell, &f.value16, x, w - 90.0, cy, p.white);
+                end = x + self.width(shell, &f.value16)?;
                 if let Some((name, index)) = &state.loaded_charge {
-                    let cx = x + self.width(shell, &f.value16)? + 14.0;
+                    let cx = end + 14.0;
                     self.pills(cx, cy, index + 1, charge_color(*index));
                     self.txt(name, &f.value16, cx + 30.0, w - 90.0, cy, charge_color(*index));
+                    end = cx + 30.0 + self.width(name, &f.value16)?;
                 }
             } else {
                 self.txt("none known", &f.value16, x, w, cy, p.dim);
+                end = x + self.width("none known", &f.value16)?;
+            }
+            if let Some(menu) = &state.menu {
+                if menu.manual {
+                    self.txt("MANUAL", &f.tag, end + 10.0, w, cy, p.amber);
+                    end += 10.0 + self.width("MANUAL", &f.tag)?;
+                }
+                let (cx, open) = (end + 14.0, menu.open);
+                let caret = if open { [(cx - 5.0, cy + 2.5), (cx + 5.0, cy + 2.5), (cx, cy - 3.0)] } else { [(cx - 5.0, cy - 2.5), (cx + 5.0, cy - 2.5), (cx, cy + 3.0)] };
+                s.polygon(&caret, Some(if open || self.hovered(&value_box) { p.white } else { p.grey }), None)?;
+                hits.push((value_box, PanelAction::Menu(!open)));
             }
             let (tag, color) = match state.load {
                 PanelLoad::Loaded => ("LOADED", p.green),
@@ -839,6 +884,35 @@ impl PlanWindow {
                 _ => ("", p.grey),
             };
             self.txt(tag, &f.tag_right, 0.0, w - PAD, cy, color);
+            // The open list under the SHELL row: a framed drop-down under the value column, the
+            // rows below it moved down by its height.
+            if let Some(menu) = state.menu.as_ref().filter(|m| m.open) {
+                let (left, right) = (VALUE_X - 8.0, w - PAD);
+                let top = y + MENU_TOP;
+                let iconned = menu.items.iter().any(|i| i.kind.as_deref().and_then(crate::shell_icons::for_kind).is_some());
+                s.fill_rect(rect(left, top, right, top + MENU_ROW_H * menu.items.len() as f32), rgba(10, 13, 15, 0.55));
+                for (i, item) in menu.items.iter().enumerate() {
+                    let r = rect(left, top + i as f32 * MENU_ROW_H, right, top + (i + 1) as f32 * MENU_ROW_H);
+                    let ry = (r.top + r.bottom) / 2.0;
+                    if item.current {
+                        s.fill_rect(r, rgba(228, 174, 71, 0.22));
+                        s.stroke_rect(r, p.amber, 1.0);
+                    } else if self.hovered(&r) {
+                        s.fill_rect(r, p.hover);
+                    }
+                    if let Some(icon) = item.kind.as_deref().and_then(crate::shell_icons::for_kind) {
+                        s.image(icon, crate::shell_icons::SIDE, rect(left + 8.0, ry - 13.0, left + 34.0, ry + 13.0))?;
+                    }
+                    let label = crate::panel::menu_label(item);
+                    self.txt(&label, &f.value16, if iconned { left + 42.0 } else { left + 10.0 }, right - 110.0, ry, p.white);
+                    if let Some(d) = &item.detail {
+                        self.txt(d, &f.tag_right, 0.0, right - 10.0, ry, if item.current { p.amber } else { p.grey });
+                    }
+                    hits.push((r, PanelAction::Pick(item.pick.clone())));
+                }
+                s.stroke_rect(rect(left, top, right, top + MENU_ROW_H * menu.items.len() as f32), edge, 1.0);
+                y += Self::menu_height(state);
+            }
             if let Some(d) = &state.detail {
                 let ny = y + 50.0;
                 self.txt("NEXT", &f.title, PAD, w, ny, p.grey);
@@ -875,8 +949,17 @@ impl PlanWindow {
                     // edge leaves a gap for its LOADED legend (beside the name it would crowd
                     // "Medium").
                     let (frame, t) = if c.planned { (color, 2.0) } else { (edge, 1.0) };
+                    // A click sets this shot's charge (the box set so, again: as read).
+                    if let Some(manual) = state.charge_manual {
+                        if self.hovered(&b) {
+                            s.fill_rect(b, p.hover);
+                        }
+                        hits.push((b, PanelAction::Pick(crate::panel::MenuPick::Charge(if c.loaded && manual { None } else { Some(c.index) }))));
+                    }
+                    let manual = c.loaded && state.charge_manual == Some(true);
+                    let legend = if manual { "MANUAL" } else { "LOADED" };
                     let gap = if c.loaded {
-                        let tw = self.width("LOADED", &f.tag)?;
+                        let tw = self.width(legend, &f.tag)?;
                         Some((b.right - 12.0 - tw - 5.0, b.right - 12.0 + 5.0))
                     } else {
                         None
@@ -885,7 +968,7 @@ impl PlanWindow {
                         Some((g0, g1)) => {
                             s.fill_rect(rect(b.left, b.top, g0, b.top + t), frame);
                             s.fill_rect(rect(g1, b.top, b.right, b.top + t), frame);
-                            self.txt("LOADED", &f.tag, g0 + 5.0, g1, b.top + t / 2.0, p.green);
+                            self.txt(legend, &f.tag, g0 + 5.0, g1, b.top + t / 2.0, if manual { p.amber } else { p.green });
                         }
                         None => s.fill_rect(rect(b.left, b.top, b.right, b.top + t), frame),
                     }

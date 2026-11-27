@@ -396,6 +396,18 @@ impl Surface {
         Ok(())
     }
 
+    /// A window surface made again at another size for the same window (the old composition
+    /// target goes first, as in `rebuild`); the caller redraws.
+    pub fn resize_window(&mut self, size: (u32, u32)) -> windows::core::Result<()> {
+        let Output::Window { hwnd, .. } = &self.output else { return Ok(()) };
+        let hwnd = *hwnd;
+        unsafe { self.context.SetTarget(None) };
+        self.output = Output::Detached { hwnd, width: size.0, height: size.1, layered: None };
+        let graphics = self.graphics.clone();
+        *self = Self::new(&graphics, hwnd, size.0, size.1)?;
+        Ok(())
+    }
+
     /// A layered surface made again at another size for the same window (the old composition
     /// target goes first, as in `rebuild`); the caller redraws.
     pub fn resize_layered(&mut self, size: (u32, u32)) -> windows::core::Result<()> {
@@ -770,6 +782,17 @@ impl Surface {
             };
             self.context.FillEllipse(&e, &self.brush);
         }
+    }
+
+    /// A `side` × `side` premultiplied BGRA image drawn into `rect`.
+    pub fn image(&self, bgra: &[u8], side: u32, rect: D2D_RECT_F) -> windows::core::Result<()> {
+        use windows::Win32::Graphics::Direct2D::{D2D1_BITMAP_OPTIONS_NONE, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC};
+        unsafe {
+            let size = windows::Win32::Graphics::Direct2D::Common::D2D_SIZE_U { width: side, height: side };
+            let bitmap = self.context.CreateBitmap(size, Some(bgra.as_ptr().cast()), side * 4, &bitmap_properties(D2D1_BITMAP_OPTIONS_NONE))?;
+            self.context.DrawBitmap(&bitmap, Some(&rect), 1.0, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, None, None);
+        }
+        Ok(())
     }
 
     pub fn fill_rect(&self, rect: D2D_RECT_F, color: D2D1_COLOR_F) {

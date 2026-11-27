@@ -17,7 +17,7 @@ use std::path::Path;
 
 use mtc_dataset::image::RgbImage;
 use mtc_overlay::{
-    AimRow, AimStrip, Axis, PanelArc, PanelLoad, PanelSolution, PanelState, PanelTarget, hud_right, loader_panel_anchor, panel_anchor, render_offscreen,
+    MenuItem, MenuPick, PanelMenu, AimRow, AimStrip, Axis, PanelArc, PanelLoad, PanelSolution, PanelState, PanelTarget, hud_right, loader_panel_anchor, panel_anchor, render_offscreen,
 };
 use mtc_vision::loading::{LOADER_STRIP_BOTTOM, MenuSeat, menu_left, read_loader_bar, read_menu};
 use mtc_vision::FrameView;
@@ -119,6 +119,15 @@ fn main() {
         locked: !args.iter().any(|a| a == "--unlocked"),
         settings_open: args.iter().any(|a| a == "--settings"),
         scale: hud_scale,
+        menu: menu_state(args.iter().position(|a| a == "--menu").and_then(|i| args.get(i + 1)).map(String::as_str)),
+        shell_kind: full.then(|| "HE".into()),
+        charge_menu: full.then(|| charge_state(args.iter().position(|a| a == "--charge").and_then(|i| args.get(i + 1)).map(String::as_str))),
+    };
+    // The shell's name as the list makes it: picked by hand shows the pick; no gun, unknown.
+    let panel = match args.iter().position(|a| a == "--menu").and_then(|i| args.get(i + 1)).map(String::as_str) {
+        Some("manual" | "manual-open") => PanelState { shell: Some("M110".into()), shell_kind: Some("SMOKE".into()), ..panel },
+        Some("guns") => PanelState { shell: None, shell_kind: None, charge: None, recommended: None, solution: None, charge_menu: None, ..panel },
+        _ => panel,
     };
     let strip = reading.as_ref().zip(right).map(|(r, right)| AimStrip {
         right,
@@ -153,6 +162,7 @@ fn main() {
             limits: [(false, false), (false, false), (false, false)],
             share: impact,
             report_shots: impact,
+            debug_map: impact,
             report_note: None,
             scale: (placement.layout.dpi as f32 / 144.0).min(1.0),
         };
@@ -226,4 +236,44 @@ fn repaint(image: &mut RgbImage, bg: [f32; 3]) {
             }
         }
     }
+}
+
+/// The shell list in one of its states (`--menu closed|open|manual|manual-open|guns`): the M109's
+/// shells, the slot read as M107; picked by hand as M110; or, the gun not recognised, the 155 mm guns.
+fn menu_state(which: Option<&str>) -> Option<PanelMenu> {
+    let item = |label: &str, detail: Option<&str>, current: bool, pick: MenuPick| MenuItem { label: label.into(), kind: None, detail: detail.map(str::to_owned), current, pick };
+    let shells = |current: &str, manual: bool| {
+        let mut items = vec![item("Auto", Some("read M107"), !manual, MenuPick::Auto)];
+        for (name, kind) in [("M107", "HE"), ("M107 VT", "TIME FUZE"), ("M107 PF", "PROXIMITY FUZE"), ("M110", "SMOKE")] {
+            items.push(MenuItem { kind: Some(kind.into()), ..item(name, None, manual && name == current, MenuPick::Shell(name.into())) });
+        }
+        items
+    };
+    Some(match which? {
+        "closed" => PanelMenu { open: false, items: shells("M107", false), manual: false },
+        "open" => PanelMenu { open: true, items: shells("M107", false), manual: false },
+        "manual" => PanelMenu { open: false, items: shells("M110", true), manual: true },
+        "manual-open" => PanelMenu { open: true, items: shells("M110", true), manual: true },
+        "guns" => PanelMenu {
+            open: true,
+            items: vec![
+                item("155mm M185", Some("M109"), false, MenuPick::Gun("155mm M185".into())),
+                item("155mm M284", Some("M109A6"), false, MenuPick::Gun("155mm M284".into())),
+                item("155mm L62", Some("PzH 2000"), false, MenuPick::Gun("155mm L62".into())),
+                item("Other guns", None, false, MenuPick::More(3)),
+            ],
+            manual: false,
+        },
+        other => panic!("--menu {other}: closed, open, manual, manual-open or guns"),
+    })
+}
+
+/// The charge list (`--charge closed|open|manual`): read Low; or set to High by hand.
+fn charge_state(which: Option<&str>) -> PanelMenu {
+    let manual = which == Some("manual");
+    let mut items = vec![MenuItem { label: "Auto".into(), kind: None, detail: Some("read Low".into()), current: !manual, pick: MenuPick::Charge(None) }];
+    for (i, name) in ["Low", "Medium", "High"].into_iter().enumerate() {
+        items.push(MenuItem { label: name.into(), kind: None, detail: None, current: manual && i == 2, pick: MenuPick::Charge(Some(i as u8)) });
+    }
+    PanelMenu { open: which == Some("open"), items, manual }
 }

@@ -37,6 +37,9 @@ fn show(overlay: &Overlay, k: i32) {
         locked: true,
         settings_open: false,
         scale: 1.0,
+        menu: None,
+        shell_kind: None,
+        charge_menu: None,
     }));
     overlay.show_aim(Some(AimStrip {
         right: OFF + 400,

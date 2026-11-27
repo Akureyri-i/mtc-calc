@@ -146,7 +146,10 @@ pub fn plan_state(at: (i32, i32), sources: &PlanSources) -> PlanState {
         selected: fire.selected_label().map(str::to_owned),
         hover: sources.hover.map(str::to_owned),
         shell: shell.map(|p| p.shell.base_name()),
-        loaded_charge: shell.and_then(|p| p.shell.charge()).map(named),
+        shell_kind: shell.map(|p| p.shell.kind.clone()),
+        loaded_charge: shell.and_then(|p| p.loaded_charge()).map(named),
+        menu: None,
+        charge_manual: None,
         load: if sources.loading.is_loading() {
             PanelLoad::Loading
         } else if sources.loading.is_loaded() {

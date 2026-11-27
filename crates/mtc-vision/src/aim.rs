@@ -176,6 +176,11 @@ impl TextScale {
         label: (1.0, 1.0),
         digits: (1.0, 1.0),
     };
+
+    /// Labels and digits both `factor` times as large.
+    pub fn times(self, factor: f32) -> Self {
+        Self { label: (self.label.0 * factor, self.label.1 * factor), digits: (self.digits.0 * factor, self.digits.1 * factor) }
+    }
 }
 
 /// "label x, label y, digits x, digits y" (the development tools' `MTC_AIM_SCALE`).
@@ -268,6 +273,19 @@ pub struct AimReader {
     /// shadow-corrected plane (`Area::shadow_corrected`).
     last: Option<Candidate>,
     last_corrected: bool,
+    /// Rows the value lines sit below where the reference geometry puts them (`fit`): the rules
+    /// place them a pixel or two off on configurations they were not measured on, and raising
+    /// Roblox's text size moves them.
+    line_dy: i32,
+}
+
+/// A text scale and value-line offset that read the readout on one frame (`AimReader::fit`):
+/// the multiple of the configuration's rule scale, the offset (rows) and the decode's cost.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ReadoutFit {
+    pub factor: f32,
+    pub dy: i32,
+    pub cost: u32,
 }
 
 impl Default for AimReader {
@@ -1111,6 +1129,7 @@ impl AimReader {
             base,
             last: None,
             last_corrected: false,
+            line_dy: 0,
         };
         reader.set_scale(scale);
         reader
@@ -1144,6 +1163,53 @@ impl AimReader {
 
     pub fn scale(&self) -> TextScale {
         self.scale
+    }
+
+    /// The value lines' offset below the reference rows (`fit`).
+    pub fn set_line_offset(&mut self, dy: i32) {
+        self.line_dy = dy;
+        self.last = None;
+    }
+
+    pub fn line_offset(&self) -> i32 {
+        self.line_dy
+    }
+
+    /// The best of `factors` (multiples of `base`) and `dys` (value-line offsets) that decodes both
+    /// lines on this frame, by the decode's cost; `None` when none decodes. The label is searched at
+    /// each factor, the lines at each offset under it. Costs about 20 ms per factor: run off the
+    /// frame loop.
+    pub fn fit(base: TextScale, view: &FrameView, client_origin: (i32, i32), factors: &[f32], dys: std::ops::RangeInclusive<i32>) -> Option<ReadoutFit> {
+        let (ox, oy) = client_origin;
+        let mut best: Option<ReadoutFit> = None;
+        for &factor in factors {
+            let mut reader = Self::with_scale(base.times(factor));
+            let area = Area::from_view(view, ox + AREA.0, oy + AREA.1, AREA.2 as usize, AREA.3 as usize);
+            let Some(&c) = reader.candidates(&area, ox, oy).first() else { continue };
+            for dy in dys.clone() {
+                reader.line_dy = dy;
+                if let Some(r) = reader.decode_at(&area, None, oy, c)
+                    && best.is_none_or(|b| r.cost < b.cost)
+                {
+                    best = Some(ReadoutFit { factor, dy, cost: r.cost });
+                }
+            }
+        }
+        best
+    }
+
+    /// The frame rectangle (x, y, width, height) of the whole area the readout is searched in.
+    pub fn whole_region(client_origin: (i32, i32)) -> (i32, i32, i32, i32) {
+        (client_origin.0 + AREA.0, client_origin.1 + AREA.1, AREA.2, AREA.3)
+    }
+
+    /// The "Elevation" label's best score on this frame at `scale` (a quick look for a readout the
+    /// current scale misses; `None` when no place scores).
+    pub fn label_score_at(scale: TextScale, view: &FrameView, client_origin: (i32, i32)) -> Option<f32> {
+        let (ox, oy) = client_origin;
+        let reader = Self::with_scale(scale);
+        let area = Area::from_view(view, ox + AREA.0, oy + AREA.1, AREA.2 as usize, AREA.3 as usize);
+        reader.candidates(&area, ox, oy).first().map(|c| c.score)
     }
 
     /// Whether the last reading came from the shadow-corrected plane (ground about as bright as the
@@ -1459,8 +1525,8 @@ impl AimReader {
                 })
             })
         };
-        let (e, ec, ex) = line((oy + ELEVATION_TOP) as f32 + DIGIT_BOTTOM, true)?;
-        let (a, ac, ax) = line((oy + AZIMUTH_TOP) as f32 + DIGIT_BOTTOM, false)?;
+        let (e, ec, ex) = line((oy + ELEVATION_TOP + self.line_dy) as f32 + DIGIT_BOTTOM, true)?;
+        let (a, ac, ax) = line((oy + AZIMUTH_TOP + self.line_dy) as f32 + DIGIT_BOTTOM, false)?;
         if (ex - ax).abs() > PAIR_TOL_X {
             return None;
         }

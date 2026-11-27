@@ -1,8 +1,9 @@
-//! The files the release program carries inside it (the `bundle` feature): every map's picture,
-//! heightmap and terrain layer, the terrain manifest, and the game's fonts. On start they are
-//! written where the program would otherwise download them (the map cache, and a fonts folder next
-//! to it), each only when missing there, so a first start needs no download and the map data's
-//! own updates are kept.
+//! The files the release program carries inside it (the `bundle` feature): the game's fonts and the
+//! wiki's ammunition data and weapon table in both editions, and in the offline edition every map's
+//! picture, heightmap and terrain layer and the terrain manifest. On start they are written where
+//! the program would otherwise download them (the data cache, the map cache, and a fonts folder next
+//! to them), each only when missing there, so a first start needs no download and the data's own
+//! updates are kept.
 
 use std::path::PathBuf;
 
@@ -23,6 +24,8 @@ pub fn unpack() {
     for (relative, data) in FILES {
         let path = if let Some(rest) = relative.strip_prefix("maps/") {
             mtc_maps::cache_dir().join(rest)
+        } else if let Some(rest) = relative.strip_prefix("data/") {
+            mtc_ammo::fetch::cache_dir().join(rest)
         } else if let Some(rest) = relative.strip_prefix("fonts/") {
             let Some(dir) = font_dir() else { continue };
             dir.join(rest)
@@ -47,6 +50,6 @@ pub fn unpack() {
         }
     }
     if written > 0 {
-        log::info!("Bundled map data and fonts: {written} files written ({:.0} MB, {:.1} s)", bytes as f64 / 1e6, started.elapsed().as_secs_f64());
+        log::info!("Bundled data and fonts: {written} files written ({:.0} MB, {:.1} s)", bytes as f64 / 1e6, started.elapsed().as_secs_f64());
     }
 }

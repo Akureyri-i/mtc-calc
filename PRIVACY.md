@@ -50,8 +50,9 @@ Statistics help us tune the calculator for guns, maps and PCs we have not tested
   - one record per run: the calculator and Windows versions, the graphics card's maker and whether it
     is dedicated or integrated, the number of CPU threads, the window size and display scaling, how well it found things on screen, its CPU
     and memory use, how often it could read the angles, the weapons and maps it recognised, weapon
-    names it could not match (the game's text), counts of loads, shots and seat menu reads, your
-    settings, and how many times it crashed.
+    names it could not match (the game's text), the shells, charges and guns you picked by hand and
+    what it had read for them, counts of loads, shots and seat menu reads, your settings, and how
+    many times it crashed.
 - **What is never sent:** screenshots, any player's name, chat, key presses, file paths, your
   computer's or your account's name, or the time of day.
 - **Records cannot be traced to you.** Each kind of record carries its own random number made at
@@ -68,7 +69,8 @@ Statistics help us tune the calculator for guns, maps and PCs we have not tested
 
 ## Problem reports
 
-Settings, *Problem report*, *Create report* makes a folder on your PC with:
+Settings, *Problem report*, *Create report* makes a folder on your PC, and the same files as one
+zip beside it, with:
 
 - `report.txt`: the calculator's version, the window size and scaling, the weapon, your settings,
   and room for you to describe the problem;
@@ -77,7 +79,8 @@ Settings, *Problem report*, *Create report* makes a folder on your PC with:
 - only if *Screenshots* is ticked: pictures of the parts of the screen the calculator reads, with
   the names in the seat menu blacked out.
 
-Nothing is sent. You decide whether and where to share the folder, for example in a GitHub issue.
+Nothing is sent. You decide whether and where to share the zip or the folder, for example in a
+GitHub issue.
 
 ## Questions
 

@@ -294,6 +294,10 @@ pub struct MapPipeline {
     forced: bool,
     /// The current map has no reference picture (the debug map): V1 is placed by the input alone.
     no_reference: bool,
+    /// The debug map was chosen in the settings: it is the map until a real one is identified.
+    debug_chosen: bool,
+    /// A real map was identified over the chosen debug map (taken by `take_debug_dropped`).
+    debug_dropped: bool,
     /// The player's shells' landings, from the yellow X.
     impacts: ImpactTracker,
     /// Landings first seen since `take_new_impacts`.
@@ -479,8 +483,8 @@ struct TrackStats {
     rebases: u32,
 }
 
-/// Loads the library into `slot`: every reference the cache lacks is downloaded from the map
-/// service, and each map keeps only its identification thumbnail and objective table. A
+/// Loads the library into `slot` from the references in the cache (the ones it lacks are returned,
+/// to be downloaded); each map keeps only its identification thumbnail and objective table. A
 /// thumbnail is read from its saved copy when that was made from the same reference file; the
 /// library is published with those, and the missing ones (first run, a reference that changed)
 /// are made afterwards and filled in. Making all 25 takes 2.6 s of one core (the HUD's start-up
@@ -492,27 +496,12 @@ fn load_library(slot: &Mutex<Option<Library>>, pace: bool) -> Vec<&'static MapIn
     let mut absent = Vec::new();
     let mut maps = Vec::new();
     let mut identifier = MapIdentifier::new(&[]);
-    let missing = mtc_maps::all().iter().filter(|m| !mtc_maps::reference_path(m).is_file()).count();
-    if missing > 0 {
-        log::info!("Map pictures: {missing} missing from the cache, downloading from the map service and its copy");
-    }
-    let mut fetched = 0;
     let mut to_make: Vec<(usize, &'static MapInfo, u64)> = Vec::new();
     let mut keys = Vec::new();
-    let mut downloads = fetch_missing_references().into_iter();
     for info in mtc_maps::all() {
-        match downloads.next().flatten() {
-            Some(Ok(true)) => {
-                fetched += 1;
-                log::info!("  downloaded {} ({fetched}/{missing})", info.id);
-            }
-            Some(Ok(false)) | None => {}
-            Some(Err(e)) => log::warn!("  {} could not be downloaded: {e}", info.id),
-        }
         let key = match std::fs::read(mtc_maps::reference_path(info)) {
             Ok(bytes) => mtc_maps::content_hash(&bytes),
-            Err(e) => {
-                log::warn!("Map picture missing {}: {e}", info.id);
+            Err(_) => {
                 absent.push(info);
                 continue;
             }
@@ -556,30 +545,50 @@ fn load_library(slot: &Mutex<Option<Library>>, pace: bool) -> Vec<&'static MapIn
     absent
 }
 
-/// Map pictures downloaded at once on a first start (each from both hosts, `mtc_maps::download`).
-const PARALLEL_DOWNLOADS: usize = 4;
+/// Map pictures downloaded at once (each from both hosts, `mtc_maps::download`): one by one a
+/// slow connection held the rest back for minutes; four at once (eight connections) left a 12 KB/s
+/// connection finishing none in seven minutes.
+const PARALLEL_DOWNLOADS: usize = 2;
 
-/// Downloads the pictures the cache lacks, `PARALLEL_DOWNLOADS` at a time: one by one a slow
-/// connection held the library back for minutes. One result per map of `mtc_maps::all`, `None`
-/// where the cache had it.
-fn fetch_missing_references() -> Vec<Option<std::io::Result<bool>>> {
-    let maps = mtc_maps::all();
+/// Downloads the pictures the cache lacks (`absent`), `PARALLEL_DOWNLOADS` at a time, and makes the
+/// library again each time one arrives, so a map is recognised as soon as its picture is in. What
+/// could not be downloaded is returned.
+fn download_into(slot: &Mutex<Option<Library>>, absent: Vec<&'static MapInfo>) -> Vec<&'static MapInfo> {
+    if absent.is_empty() {
+        return absent;
+    }
+    let total = absent.len();
+    log::info!("Map pictures: {total} missing from the cache, downloading from the map service and its copy");
     let next = std::sync::atomic::AtomicUsize::new(0);
-    let results: Vec<Mutex<Option<std::io::Result<bool>>>> = maps.iter().map(|_| Mutex::new(None)).collect();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut failed = Vec::new();
     std::thread::scope(|scope| {
-        for _ in 0..PARALLEL_DOWNLOADS {
-            scope.spawn(|| {
-                loop {
-                    let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    let Some(info) = maps.get(i) else { break };
-                    if !mtc_maps::reference_path(info).is_file() {
-                        *results[i].lock().expect("download result") = Some(mtc_maps::ensure_reference(info));
-                    }
+        for _ in 0..PARALLEL_DOWNLOADS.min(total) {
+            let (tx, absent, next) = (tx.clone(), &absent, &next);
+            scope.spawn(move || {
+                while let Some(&info) = absent.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed)) {
+                    let _ = tx.send((info, mtc_maps::ensure_reference(info)));
                 }
             });
         }
+        drop(tx);
+        let mut arrived = 0;
+        for (info, result) in rx {
+            match result {
+                Ok(_) if mtc_maps::reference_path(info).is_file() => {
+                    arrived += 1;
+                    log::info!("  downloaded {} ({arrived}/{total}), rebuilding the map library", info.id);
+                    load_library(slot, true);
+                }
+                Ok(_) => failed.push(info),
+                Err(e) => {
+                    log::warn!("  {} could not be downloaded: {e}", info.id);
+                    failed.push(info);
+                }
+            }
+        }
     });
-    results.into_iter().map(|r| r.into_inner().expect("download result")).collect()
+    failed
 }
 
 /// The live reference library, loaded on a thread once per run: a capture started again (after
@@ -590,7 +599,9 @@ fn live_library() -> Arc<Mutex<Option<Library>>> {
         let library = Arc::new(Mutex::new(None));
         let slot = library.clone();
         let load = move || {
+            // The maps in the cache are usable at once; the rest join as they download.
             let absent = load_library(&slot, true);
+            let absent = download_into(&slot, absent);
             // The pictures not downloaded are tried again in the background (from mainland China
             // a quarter of China Unicom's attempts timed out).
             retry_references(&slot, absent);
@@ -671,7 +682,8 @@ impl MapPipeline {
             live_library()
         } else {
             let library = Arc::new(Mutex::new(None));
-            load_library(&library, false);
+            let absent = load_library(&library, false);
+            download_into(&library, absent);
             library
         };
         let library_for_ident = library.clone();
@@ -731,6 +743,8 @@ impl MapPipeline {
             last_score: 0.0,
             forced: false,
             no_reference: false,
+            debug_chosen: false,
+            debug_dropped: false,
             impacts: ImpactTracker::default(),
             new_impacts: Vec::new(),
             expected: Vec::new(),
@@ -785,6 +799,31 @@ impl MapPipeline {
         self.forced = true;
         self.no_reference = mtc_maps::by_id(&info.id).is_none();
         log::info!("Map: {} (given on the command line{})", info.name, if self.no_reference { "; no reference picture: the full map is tracked from the input and must be at 1x when the HUD opens" } else { "" });
+    }
+
+    /// The debug map chosen in the settings (`on`) or not: the map while nothing else is identified
+    /// (it is in no library: flat ground, the full map tracked from the input from 1x); the minimap
+    /// is still identified, and a real map found takes over.
+    pub fn choose_debug_map(&mut self, on: bool) {
+        if on == self.debug_chosen {
+            return;
+        }
+        self.debug_chosen = on;
+        let debug = mtc_maps::debug_map();
+        if on {
+            self.set_current(debug);
+            self.no_reference = true;
+            log::info!("Map: {} (chosen in the settings; the full map is tracked from the input and must be at 1x when the HUD opens; a real map recognised takes over)", debug.name);
+        } else if self.current.as_ref().is_some_and(|c| c.info.id == debug.id) {
+            self.current = None;
+            self.no_reference = false;
+            log::info!("Map: identified from the screen again (the debug map no longer chosen)");
+        }
+    }
+
+    /// A real map was identified over the debug map chosen in the settings, since the last call.
+    pub fn take_debug_dropped(&mut self) -> bool {
+        std::mem::take(&mut self.debug_dropped)
     }
 
     /// The V1 canvas (for the model log).
@@ -1522,6 +1561,11 @@ impl MapPipeline {
         );
         crate::diag::note(crate::diag::Event::Map(info.id.clone(), if decided.by_layout { "layout" } else { "thumbnail" }));
         self.set_current(info);
+        self.no_reference = false;
+        if std::mem::take(&mut self.debug_chosen) {
+            self.debug_dropped = true;
+            log::info!("Map: {} recognised over the debug map chosen in the settings: back to automatic", info.name);
+        }
     }
 
     /// A V1 frame at rest to the game-made reference (`game_ref.rs`): taken while the canvas has the
@@ -1838,6 +1882,36 @@ mod tests {
         };
         let (a, b) = (gun_at("000168697.png"), gun_at("000269989.png"));
         assert!((b.0 - a.0 - 1000.0).abs() < 3.0 && (b.1 - a.1).abs() < 3.0, "{a:?} {b:?}");
+    }
+
+    /// The debug map chosen in the settings puts the signs 1000 m apart as `--map debug` does; a
+    /// real map identified takes over and says so once.
+    #[test]
+    fn the_debug_map_chosen_in_the_settings_gives_way_to_a_real_map() {
+        let session = mtc_dataset::datasets_dir().join("raw/20261117-135421/frames");
+        if !session.is_dir() {
+            return;
+        }
+        let cues = mtc_vision::map::CueReader::new();
+        let gun_at = |file: &str| {
+            let image = mtc_dataset::image::RgbImage::load_png(&session.join(file)).expect("frame");
+            let view = FrameView::rgb(&image.data, image.width, image.height);
+            let mut pipeline = MapPipeline::new(false);
+            pipeline.choose_debug_map(true);
+            let c = cues.read(&view, (0, 34));
+            pipeline.process(&view, MapView::Full, &c, (0, 34), None, MapInput::default(), 0);
+            let gun = pipeline.arrow().expect("arrow").map;
+            (gun.0 * 4788.0, gun.1 * 4788.0)
+        };
+        let (a, b) = (gun_at("000168697.png"), gun_at("000269989.png"));
+        assert!((b.0 - a.0 - 1000.0).abs() < 3.0 && (b.1 - a.1).abs() < 3.0, "{a:?} {b:?}");
+
+        let mut pipeline = MapPipeline::new(false);
+        pipeline.choose_debug_map(true);
+        let info = mtc_maps::by_id("fulvia_gap").expect("a library map");
+        pipeline.adopt(MapMatch { index: 0, by_layout: true, score: 1.0, margin: 1.0 }, info, MapView::Mini);
+        assert_eq!(pipeline.current.as_ref().map(|c| c.info.id.as_str()), Some(info.id.as_str()));
+        assert!(!pipeline.no_reference && pipeline.take_debug_dropped() && !pipeline.take_debug_dropped());
     }
 
     /// V1 closed and opened again shows the whole map (the game resets the zoom);

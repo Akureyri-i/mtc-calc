@@ -145,7 +145,7 @@ fn planning(fire: &FireControl, to_screen: &dyn Fn(f64, f64) -> (f32, f32), px_p
         let (right, bottom) = to_screen(u1, v1);
         (left, top, right, bottom)
     });
-    let loaded = fire.shell().and_then(|p| p.shell.charge());
+    let loaded = fire.shell().and_then(|p| p.loaded_charge());
     let focus = fire.selected().and_then(|(_, s)| s.plan?.charge);
     // Not while V1's zoom animates without two diamonds to measure the scale by (as the blast).
     let rings = if gun.is_some() && scale_known {

@@ -51,6 +51,9 @@ fn main() {
         locked: true,
         settings_open: false,
         scale: 1.0,
+        menu: None,
+        shell_kind: None,
+        charge_menu: None,
     };
     overlay.show_panel(Some(state.clone()));
     overlay.show_aim(Some(AimStrip {

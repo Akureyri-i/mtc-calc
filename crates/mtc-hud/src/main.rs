@@ -20,6 +20,7 @@ mod maps;
 mod marks;
 mod plan;
 mod prefs;
+mod readout_fit;
 mod retry;
 mod seats;
 mod shots;
@@ -27,6 +28,7 @@ mod stats;
 mod tray;
 mod ui_text;
 mod worker;
+mod zip;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -74,6 +76,8 @@ const PAN_PROCESS_INTERVAL: Duration = Duration::from_millis(12);
 /// With no angle readout and no map view on screen (menus, other games) frames are processed
 /// this often, and the wide search for an absent readout runs at this rate too.
 const IDLE_INTERVAL: Duration = Duration::from_millis(200);
+/// The gunner's strip and panel stay this long after the readout was last on screen.
+const READOUT_HOLD_MS: u64 = 400;
 
 /// A charge mark sits this far (px) inside a card's right border, on the row's middle.
 const CHARGE_DOT_INSET: f64 = 14.0;
@@ -221,11 +225,17 @@ struct Hud {
     screen_offset: (i32, i32),
     /// The aim strip's and the panel's scale for this frame's configuration (`overlay_scales`).
     overlay_scales: (f32, f32),
+    /// The shell list's open page on the panels (`None`: closed), and whether the charge list is
+    /// open.
+    shell_list: Option<loading::ListPage>,
+    charge_list_open: bool,
     map_region: Region,
     loading_region: Region,
     seat_region: Region,
     seats: seats::SeatWatch,
     aim: AimReader,
+    /// The readout's scale and line offset found on screen when the rule reads it poorly.
+    readout_fit: readout_fit::ReadoutFitter,
     cues: CueReader,
     maps: maps::MapPipeline,
     loading: loading::LoadingPipeline,
@@ -303,6 +313,8 @@ struct Hud {
     /// Last time the angle readout was searched for or read.
     last_aim: Instant,
     aim_present: bool,
+    /// When the readout was last on screen (read or found unreadable; ms since start).
+    readout_seen_ms: Option<u64>,
     idle: bool,
     last_text: Option<(String, String)>,
     stats: Stats,
@@ -340,14 +352,20 @@ impl GraphicsCaptureApiHandler for Hud {
             placement: Placement::new(Placement::VIRTUAL_ORIGIN, UiLayout::REFERENCE),
             screen_offset: (0, 0),
             overlay_scales: (1.0, 1.0),
+            shell_list: None,
+            charge_list_open: false,
             map_region: Region::default(),
             loading_region: Region::default(),
             seat_region: Region::default(),
             seats: seats::SeatWatch::new(),
             aim: AimReader::new(),
+            readout_fit: readout_fit::ReadoutFitter::new(mtc_vision::aim::TextScale::REFERENCE),
             cues: CueReader::new(),
             maps: {
                 let mut maps = forced_map(maps::MapPipeline::new(true));
+                if prefs::Prefs::load().debug_map && arg_value("--map").is_none() {
+                    maps.choose_debug_map(true);
+                }
                 // Development (`--measure`): the X is looked for under every objective
                 // icon on every map read, so the cost of that search shows outside artillery too.
                 if std::env::args().any(|a| a == "--measure") {
@@ -397,6 +415,7 @@ impl GraphicsCaptureApiHandler for Hud {
             last_processed: Instant::now() - PROCESS_INTERVAL,
             last_aim: Instant::now() - IDLE_INTERVAL,
             aim_present: false,
+            readout_seen_ms: None,
             idle: false,
             last_text: None,
             stats: Stats::new(),
@@ -459,6 +478,14 @@ impl GraphicsCaptureApiHandler for Hud {
                 {
                     self.loading.fire_key(at.saturating_duration_since(self.started).as_millis() as u64);
                     self.fire_key_at = Some(at);
+                }
+                // A click off the HUD's windows closes an open shell or charge list.
+                if let mtc_input::InputEvent::Button { button: mtc_input::MouseButton::Left, down: true, pos, .. } = event
+                    && (self.shell_list.is_some() || self.charge_list_open)
+                    && !own_window_at(pos)
+                {
+                    self.shell_list = None;
+                    self.charge_list_open = false;
                 }
                 // Seats change by clicking the seat menu: read it soon after.
                 if let mtc_input::InputEvent::Button { button: mtc_input::MouseButton::Left, down: true, pos, at } = event
@@ -531,6 +558,9 @@ impl GraphicsCaptureApiHandler for Hud {
         if placement.layout != self.aim_layout {
             self.aim_layout = placement.layout;
             self.aim.set_scale(self.aim_layout.readout_text());
+            self.aim.set_line_offset(0);
+            self.readout_fit.reset(self.aim_layout.readout_text());
+            self.ui_text.set_factor(1.0);
             self.cues = CueReader::for_placement(&placement);
             self.maps.set_placement(&placement);
             let l = self.aim_layout;
@@ -588,6 +618,29 @@ impl GraphicsCaptureApiHandler for Hud {
         } else {
             AimResult::Absent
         };
+        // Read poorly at the rule's scale: the scale and line offset found on screen
+        // (`readout_fit`), from the whole area read back on the frame a try starts.
+        if read_aim {
+            let now = Instant::now();
+            self.readout_fit.note(&result, now);
+            if self.readout_fit.wants_area(now) {
+                let area = AimReader::whole_region(bottom);
+                let (x, y, w, h) = placement.bottom_source(area, frame_size);
+                self.readback.read_regions(frame, &[(x, y, w as u32, h as u32)], &mut self.aim_area)?;
+                let remapped = (!placement.is_reference()).then(|| placement.bottom_remap(&region_view(&self.aim_area[0]), area));
+                let copy = readout_fit::AreaCopy::of(&remapped.as_ref().map_or(region_view(&self.aim_area[0]), |r| r.view()));
+                self.readout_fit.offer(copy, bottom, now);
+            }
+            if let Some(fit) = self.readout_fit.poll(now) {
+                self.aim.set_scale(self.readout_fit.scale_for(fit));
+                self.aim.set_line_offset(fit.dy);
+                log::info!("Angle readout fitted on screen: text {:.3} times the rule's, value lines {:+} px (decode cost {})", fit.factor, fit.dy, fit.cost);
+                diag::note(diag::Event::ReadoutFit(fit.factor, fit.dy, fit.cost));
+                // A text size step up (not a rule a little off): the loading UI's text is as much
+                // larger.
+                self.ui_text.set_factor(if fit.factor >= readout_fit::TEXT_SIZE_RAISED { fit.factor } else { 1.0 });
+            }
+        }
         let cues = self.cues.read_views(&views[1..probes_from], origin);
         // A container found: the cues and the map views from it on.
         if views.len() > probes_from && self.locator.take(&views[probes_from..], origin) {
@@ -697,6 +750,9 @@ impl GraphicsCaptureApiHandler for Hud {
         // ms): measured on screen, the plan panel showed 72 ms after V1 was seen when it waited
         // (`--latency`). The panels show the solutions as of the last frame meanwhile.
         let cyc = self.stats.part(stats::Part::Logic, cyc);
+        if !matches!(result, AimResult::Absent) {
+            self.readout_seen_ms = Some(now_ms);
+        }
         self.update_overlay(&geometry, &placement, &result, now_ms, cues.scoped(), v1);
         if let Some((seat, offset)) = self.panel_migrated.take() {
             self.set_panel_offset(seat, offset);
@@ -707,12 +763,21 @@ impl GraphicsCaptureApiHandler for Hud {
         let window_scale = (placement.layout.dpi as f32 / 144.0).min(1.0);
         self.flags.overlay.show_settings(self.settings_open.then(|| self.prefs.settings_state(centre, window_scale, self.report_note.clone())));
         self.flags.overlay.show_consent(self.consent_open.then_some(mtc_overlay::ConsentState { centre, dont_ask: self.consent_dont_ask, scale: window_scale }));
+        // A real map recognised over the debug map chosen in the settings: the setting goes back to
+        // automatic.
+        if self.maps.take_debug_dropped() {
+            self.prefs.debug_map = false;
+            self.prefs.save();
+        }
         if self.report_pending {
             self.report_pending = false;
             self.report_note = Some(match self.problem_report(frame, &placement, frame_size) {
-                Ok(dir) => {
-                    let _ = std::process::Command::new("explorer").arg(&dir).spawn();
-                    "Saved; the folder is open. Attach its files to your report.".to_owned()
+                // The zip selected in its folder, ready to drag into a chat.
+                Ok(zip) => {
+                    // Explorer takes the path quoted after the comma, not the switch quoted whole.
+                    use std::os::windows::process::CommandExt;
+                    let _ = std::process::Command::new("explorer").raw_arg(format!("/select,\"{}\"", zip.display())).spawn();
+                    "Saved as one zip, selected in the folder: send that file.".to_owned()
                 }
                 Err(e) => format!("Could not save the report: {e}"),
             });
@@ -810,6 +875,29 @@ impl GraphicsCaptureApiHandler for Hud {
         for action in self.flags.overlay.take_actions() {
             match action {
                 PanelAction::Select(label) => self.fire.select(&label),
+                // The shell and charge lists: one open at a time; a click elsewhere closes them.
+                PanelAction::Menu(open) => {
+                    self.shell_list = open.then(|| self.loading.first_page());
+                    self.charge_list_open = false;
+                }
+                PanelAction::ChargeMenu(open) => {
+                    self.charge_list_open = open;
+                    self.shell_list = None;
+                }
+                PanelAction::Pick(pick) => match pick {
+                    mtc_overlay::MenuPick::More(start) | mtc_overlay::MenuPick::Back(Some(start)) => self.shell_list = Some(loading::ListPage::Guns(start)),
+                    mtc_overlay::MenuPick::Back(None) => self.shell_list = Some(loading::ListPage::Shells),
+                    // A gun picked: its shells next.
+                    mtc_overlay::MenuPick::Gun(_) => {
+                        self.loading.pick_from_list(&pick);
+                        self.shell_list = Some(loading::ListPage::Shells);
+                    }
+                    _ => {
+                        self.loading.pick_from_list(&pick);
+                        self.shell_list = None;
+                        self.charge_list_open = false;
+                    }
+                },
                 PanelAction::UpdateGun => self.fire.update_gun(&self.maps),
                 PanelAction::Arc(high) => self.fire.choose_arc(high),
                 PanelAction::Hover(label) => self.panel_hover = label,
@@ -863,6 +951,9 @@ impl GraphicsCaptureApiHandler for Hud {
                     self.prefs.save();
                     if let mtc_overlay::Setting::Share(_) = setting {
                         self.diag.set_sharing(self.prefs.sharing());
+                    }
+                    if let mtc_overlay::Setting::DebugMap(on) = setting {
+                        self.maps.choose_debug_map(on);
                     }
                     if let mtc_overlay::Setting::Step(mtc_overlay::Stepper::DragOffset, _) = setting {
                         mtc_overlay::FOLLOW_OFFSET_US.store(i64::from(self.prefs.drag_offset_ms) * 1000, Ordering::Relaxed);
@@ -1055,7 +1146,8 @@ impl Hud {
     /// A problem report: a folder with this run's records, the last minutes of the log (folders as
     /// their variables), the settings and the places found on screen; with "Screenshots" ticked,
     /// what the HUD reads on this frame: the readout box, the loading area, the map view and the
-    /// seat menu with the names blacked out.
+    /// seat menu with the names blacked out. The same files go into a zip beside the folder, whose
+    /// path is returned.
     fn problem_report(&mut self, frame: &mut Frame, placement: &Placement, frame_size: (u32, u32)) -> Result<std::path::PathBuf, String> {
         let dir = diag::dir().ok_or("no folder")?.join("reports").join(format!("report-{}", logfile::day_time_stamp()));
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -1117,8 +1209,19 @@ impl Hud {
                 image.save_png(&dir.join(format!("{name}.png"))).map_err(|e| e.to_string())?;
             }
         }
-        log::info!("Problem report: {}", short_path(&dir));
-        Ok(dir)
+        // The folder's files as one zip beside it: one file to send.
+        let mut files: Vec<(String, Vec<u8>)> = Vec::new();
+        for entry in std::fs::read_dir(&dir).map_err(|e| e.to_string())?.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                files.push((entry.file_name().to_string_lossy().into_owned(), std::fs::read(&path).map_err(|e| e.to_string())?));
+            }
+        }
+        files.sort_by(|a, b| a.0.cmp(&b.0));
+        let zip = dir.with_extension("zip");
+        zip::write_stored(&zip, &files).map_err(|e| e.to_string())?;
+        log::info!("Problem report: {} and {}", short_path(&dir), short_path(&zip));
+        Ok(zip)
     }
 
     /// Input since the last frame, while Roblox has focus: a left click on a marker or a selected
@@ -1404,6 +1507,9 @@ impl Hud {
         let r = match result {
             AimResult::Read(r) if foreground => r,
             AimResult::Unreadable { .. } if foreground => return,
+            // Missed for a frame or two (the camera swinging past a bright background): what is
+            // shown stays rather than blinking off.
+            AimResult::Absent if foreground && self.readout_seen_ms.is_some_and(|t| now_ms.saturating_sub(t) < READOUT_HOLD_MS) => return,
             _ => {
                 overlay.show_aim(None);
                 match self.loading.loader_layout(now_ms).filter(|_| foreground) {
@@ -1570,7 +1676,19 @@ impl Hud {
     fn plan_state(&self, placement: &Placement) -> PlanState {
         let (at, scale) = plan_place(placement, self.screen_offset);
         let sources = plan::PlanSources { maps: &self.maps, fire: &self.fire, loading: &self.loading, elevation_seen: self.elevation_seen.as_ref(), hover: self.hovered(), terrain_open: self.prefs.plan_terrain_open };
-        PlanState { settings_open: self.settings_open, targets_open: self.prefs.plan_targets_open, scale, ..plan::plan_state(at, &sources) }
+        PlanState {
+            settings_open: self.settings_open,
+            targets_open: self.prefs.plan_targets_open,
+            scale,
+            menu: self.shell_menu(),
+            charge_manual: self.loading.charge_list(false).map(|m| m.manual),
+            ..plan::plan_state(at, &sources)
+        }
+    }
+
+    /// The shell list as the panels show it: open on its page, or closed on the first.
+    fn shell_menu(&self) -> Option<mtc_overlay::PanelMenu> {
+        self.loading.shell_list(self.shell_list.unwrap_or_else(|| self.loading.first_page()), self.shell_list.is_some())
     }
 
     /// What the panel shows: targets, the selected target's solution, the shell, and the first
@@ -1629,7 +1747,7 @@ impl Hud {
             } else {
                 PanelLoad::Empty
             },
-            charge: shell.and_then(|p| p.shell.charge()).map(short),
+            charge: shell.and_then(|p| p.loaded_charge()).map(short),
             recommended: fire.recommendation.as_ref().map(|r| short(r.charge)),
             gun_set: fire.gun_set(),
             notice: notice.map(str::to_owned),
@@ -1642,8 +1760,24 @@ impl Hud {
             locked: self.prefs.panel_locked,
             settings_open: self.settings_open,
             scale: self.overlay_scales.1,
+            menu: self.shell_menu(),
+            shell_kind: shell.map(|p| p.shell.kind.clone()),
+            charge_menu: self.loading.charge_list(self.charge_list_open),
         }
     }
+}
+
+/// Whether the screen point is on one of this process's windows (the HUD's panels).
+fn own_window_at(pos: (i32, i32)) -> bool {
+    use windows::Win32::Foundation::POINT;
+    use windows::Win32::UI::WindowsAndMessaging::{GetWindowThreadProcessId, WindowFromPoint};
+    let hwnd = unsafe { WindowFromPoint(POINT { x: pos.0, y: pos.1 }) };
+    if hwnd.0.is_null() {
+        return false;
+    }
+    let mut pid = 0u32;
+    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+    pid == std::process::id()
 }
 
 fn arg_value(name: &str) -> Option<String> {
@@ -1725,14 +1859,17 @@ fn roblox_font_dir() -> std::path::PathBuf {
 }
 
 /// The V1 plan panel's top-left (screen px; `offset` turns frame into screen px) and scale: docked
-/// right of the full map at its top; its own size where it fits there and inside the game window,
-/// else smaller to fit (a smaller window).
+/// right of the full map at its top, at the map's size against the reference (so it stands beside
+/// the map as it does there on every screen), smaller only where its tallest would leave the game
+/// window. It grows down with its rows, past the map's bottom with many targets.
 fn plan_place(placement: &Placement, offset: (i32, i32)) -> ((i32, i32), f32) {
-    let (left, top, side) = placement.map_container(mtc_vision::map::MapView::Full);
+    let full = mtc_vision::map::MapView::Full;
+    let (left, top, side) = placement.map_container(full);
     let (sx, sy) = (offset.0 + placement.origin.0, offset.1 + placement.origin.1);
     let at = (sx + (left + side).round() as i32 + PLAN_GAP, sy + top.round() as i32);
     let room = (sx + placement.layout.width as i32 - PLAN_MARGIN - at.0, sy + placement.layout.height as i32 - PLAN_MARGIN - at.1);
-    let scale = 1.0f32.min(room.0 as f32 / mtc_overlay::PLAN_WIDTH as f32).min(room.1 as f32 / mtc_overlay::PLAN_MAX_HEIGHT as f32).max(0.3);
+    let map = (side / UiLayout::REFERENCE.map_container(full).2) as f32;
+    let scale = map.min(room.0 as f32 / mtc_overlay::PLAN_WIDTH as f32).min(room.1 as f32 / mtc_overlay::PLAN_LIMIT_HEIGHT as f32).max(0.3);
     (at, scale)
 }
 
@@ -1791,6 +1928,10 @@ fn replay(id: &str) {
     let mut map_layout = UiLayout::REFERENCE;
     let mut locator = locator::Locator::new();
     let mut pipeline = forced_map(maps::MapPipeline::new(false));
+    // `--debug-map`: as the debug map chosen in the settings.
+    if std::env::args().any(|a| a == "--debug-map") {
+        pipeline.choose_debug_map(true);
+    }
     if std::env::args().any(|a| a == "--under-all") {
         pipeline.look_under_every_icon();
     }
@@ -1798,6 +1939,8 @@ fn replay(id: &str) {
     // Off the reference the readout is read on its area resampled to the reference geometry.
     let aim_area = AimReader::new().wanted_region(Placement::VIRTUAL_ORIGIN);
     let mut aim_layout = UiLayout::REFERENCE;
+    let mut readout_fit = readout_fit::ReadoutFitter::new(mtc_vision::aim::TextScale::REFERENCE);
+    let replay_clock = Instant::now();
     let mut shift = (0, 0);
     let mut aim_counts: std::collections::BTreeMap<(u32, u32, u32), (u32, u32)> = Default::default();
     let render_aim = arg_value("--render-aim").map(std::path::PathBuf::from);
@@ -1824,7 +1967,9 @@ fn replay(id: &str) {
     let mut fire_keys = session.keys().into_iter().filter(|(_, k)| k.vk == VK_F && k.down).map(|(t, _)| t).peekable();
     let mut last_view: Option<mtc_vision::map::MapView> = None;
     // The configuration the loading pipeline's text reader is for.
-    let mut text_layout: Option<UiLayout> = None;
+    let mut text_layout: Option<(UiLayout, u32)> = None;
+    // Roblox's text size multiple from the readout's fit (1: the default), as live.
+    let mut text_factor = 1.0f32;
     let mut memory_at: Option<u64> = None;
     let mut pages_released_at = 0u64;
     for meta in frames {
@@ -1905,13 +2050,29 @@ fn replay(id: &str) {
         if placement.layout != aim_layout {
             aim_layout = placement.layout;
             aim.set_scale(aim_layout.readout_text());
+            aim.set_line_offset(0);
+            readout_fit.reset(aim_layout.readout_text());
+            text_factor = 1.0;
         }
-        let result = if placement.is_reference() {
-            aim.read(&view, origin)
-        } else {
-            let remapped = placement.bottom_remap(&view, aim_area);
-            aim.read(&remapped.view(), Placement::VIRTUAL_ORIGIN)
-        };
+        let remapped = (!placement.is_reference()).then(|| placement.bottom_remap(&view, aim_area));
+        let (aim_view, aim_origin) = remapped.as_ref().map_or((view, origin), |r| (r.view(), Placement::VIRTUAL_ORIGIN));
+        let result = aim.read(&aim_view, aim_origin);
+        // As live (`readout_fit`), each try finished on the frame it starts on.
+        let now = replay_clock + Duration::from_millis(meta.t_ms);
+        // `MTC_NO_READOUT_FIT` (development): the rule's scale only, to compare.
+        if std::env::var_os("MTC_NO_READOUT_FIT").is_none() {
+            readout_fit.note(&result, now);
+        }
+        if readout_fit.wants_area(now) {
+            readout_fit.offer(readout_fit::AreaCopy::of(&aim_view), aim_origin, now);
+            readout_fit.block();
+        }
+        if let Some(fit) = readout_fit.poll(now) {
+            aim.set_scale(readout_fit.scale_for(fit));
+            aim.set_line_offset(fit.dy);
+            log::info!("Angle readout fitted on screen ({:.1} s): text {:.3} times the rule's, value lines {:+} px (decode cost {})", meta.t_ms as f64 / 1000.0, fit.factor, fit.dy, fit.cost);
+            text_factor = if fit.factor >= readout_fit::TEXT_SIZE_RAISED { fit.factor } else { 1.0 };
+        }
         let key = (aim_layout.dpi, aim_layout.width, aim_layout.height);
         let count = aim_counts.entry(key).or_default();
         count.1 += 1;
@@ -1944,9 +2105,10 @@ fn replay(id: &str) {
                 shown.crop(x0, y0, w, h).save_png(&dir.join(format!("{}-{}x{}_{:07}.png", key.0, key.1, key.2, meta.t_ms))).expect("save");
             }
         }
-        if text_layout != Some(placement.layout) {
-            text_layout = Some(placement.layout);
-            let reader = if placement.is_reference() { mtc_vision::text::TextReader::new() } else { ui_text::reader_for(&font_dir, placement.layout).expect("UI glyph templates") };
+        let text_key = (placement.layout, (text_factor * 1000.0).round() as u32);
+        if text_layout != Some(text_key) {
+            text_layout = Some(text_key);
+            let reader = if placement.is_reference() && text_key.1 == 1000 { mtc_vision::text::TextReader::new() } else { ui_text::reader_for(&font_dir, placement.layout, text_factor).expect("UI glyph templates") };
             loading.set_reader(reader, !placement.is_reference());
         }
         let bottom = placement.bottom_origin();
