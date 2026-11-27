@@ -148,11 +148,14 @@ impl StripWindow {
 
     /// The strip drawn offscreen where it would show.
     pub fn render_offscreen(graphics: &Rc<Graphics>, strip: &AimStrip) -> windows::core::Result<crate::Layer> {
-        let window = Self::with_surface(HWND::default(), Surface::offscreen(graphics, SURFACE.0, SURFACE.1)?)?;
+        // Big enough for the strip at its scale (live strips stop at `MAX_SCALE`; renders for
+        // pictures go above).
+        let surface = if strip.scale > MAX_SCALE { ((WIDTH as f32 * strip.scale).ceil() as u32, (HEIGHT as f32 * strip.scale).ceil() as u32) } else { SURFACE };
+        let window = Self::with_surface(HWND::default(), Surface::offscreen(graphics, surface.0, surface.1)?)?;
         let (x, y, w, h) = window_rect(strip.right, strip.rows[0].label_y, strip.scale);
         window.draw(strip, y)?;
         let full = window.surface.pixels()?;
-        let row = SURFACE.0 as usize * 4;
+        let row = surface.0 as usize * 4;
         let bgra = (0..h as usize).flat_map(|r| full[r * row..r * row + w as usize * 4].iter().copied()).collect();
         Ok(crate::Layer { x, y, width: w as u32, height: h as u32, bgra })
     }

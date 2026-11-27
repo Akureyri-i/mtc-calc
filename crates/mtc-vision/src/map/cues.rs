@@ -1,6 +1,7 @@
 //! Which map views are on screen, from fixed UI cues next to them.
 //!
-//! - V1: the "Ping" mouse-hint icon under the full map (only drawn while V1 is open).
+//! - V1: the "Ping" mouse-hint icon under the full map (only drawn while V1 is open). Never while
+//!   scoped: in the sight M opens V2, and the icon's place is the sight picture.
 //! - V3: the grey "M" key box under the minimap (only drawn while V3 is shown, scoped or not).
 //! - V2: scoped (the sight's black surround) while the minimap's "M" box is gone — opening the
 //!   map in the sight replaces V3 with V2 — and a map in the V2 container: a black screen (death,
@@ -22,6 +23,12 @@ use crate::map::geometry::MapView;
 use crate::view::FrameView;
 
 const SEARCH: i32 = 2;
+/// A window has to vary at least this share of the template's own spread (standard deviation)
+/// to be scored. On a flat bright patch (cloud, a white hull) the one-pass variance cancels to
+/// rounding noise and the correlation is meaningless: windows varying under half a luma level
+/// scored up to 1.92, while from half a level up no window without the icon scored above 0.30.
+/// Real icons vary at least 0.86 (Ping) and 0.34 (M box) of their template's spread.
+const MIN_SPREAD_SHARE: f32 = 0.1;
 /// Off the reference the cues' places come from rules: the V1 hint row is right-aligned after
 /// text drawn at stepped font sizes (the Ping icon was found up to 2.9 px from its rule), and the
 /// minimap's M box sits 1-2 px off its container's scale where that is held to 0.32 H.
@@ -142,12 +149,25 @@ impl CueTemplate {
 
     /// Best masked NCC within ±`search` px of the nominal position, in whichever view covers it.
     fn score(&self, views: &[FrameView], client_origin: (i32, i32)) -> f32 {
+        self.score_detail(views, client_origin, MIN_SPREAD_SHARE).0
+    }
+
+    /// The template's spread: standard deviation of its masked values (luma levels).
+    fn spread(&self) -> f32 {
+        self.norm / (self.points.len() as f32).sqrt()
+    }
+
+    /// Best masked NCC and the spread (standard deviation, luma levels) of the window it was
+    /// found in, over the windows that vary at least `min_share` of the template's spread.
+    fn score_detail(&self, views: &[FrameView], client_origin: (i32, i32), min_share: f32) -> (f32, f32) {
         let (rx, ry, rw, rh) = self.region(client_origin);
         let Some(view) = views.iter().find(|v| v.covers(rx, ry, rw, rh)) else {
-            return 0.0;
+            return (0.0, 0.0);
         };
         let n = self.points.len() as f32;
-        let mut best = f32::MIN;
+        // As variance summed over the points (`var` below); at least 1 for a defined score.
+        let min_var = ((min_share * self.spread()).powi(2) * n).max(1.0);
+        let (mut best, mut best_spread) = (f32::MIN, 0.0f32);
         for dy in -self.search..=self.search {
             for dx in -self.search..=self.search {
                 let (ox, oy) = (self.x + client_origin.0 + dx, self.y + client_origin.1 + dy);
@@ -159,12 +179,15 @@ impl CueTemplate {
                     cross += v * t;
                 }
                 let var = sum_sq - sum * sum / n;
-                if var > 1.0 {
-                    best = best.max(cross / (var.sqrt() * self.norm));
+                if var > min_var {
+                    let score = cross / (var.sqrt() * self.norm);
+                    if score > best {
+                        (best, best_spread) = (score, (var / n).sqrt());
+                    }
                 }
             }
         }
-        best
+        (best, best_spread)
     }
 }
 
@@ -191,13 +214,13 @@ impl ViewCues {
         self.scope_black >= SCOPE_MIN_BLACK_FRACTION
     }
 
+    /// Whether `view` is on screen. In the sight M opens the scope map, never the full map, so a
+    /// Ping score while scoped is the scene under the hint row's place.
     pub fn shows(&self, view: MapView) -> bool {
         match view {
-            MapView::Full => self.ping_score >= PING_MIN_SCORE,
+            MapView::Full => self.ping_score >= PING_MIN_SCORE && !self.scoped(),
             MapView::Mini => self.m_key_score >= self.m_key_min,
-            MapView::Scope => {
-                self.scoped() && self.m_key_score < self.m_key_min && self.ping_score < PING_MIN_SCORE && self.scope_lit >= SCOPE_MIN_LIT
-            }
+            MapView::Scope => self.scoped() && self.m_key_score < self.m_key_min && self.scope_lit >= SCOPE_MIN_LIT,
         }
     }
 
@@ -328,6 +351,19 @@ impl CueReader {
         ]
     }
 
+    /// Development: the Ping icon's best score over every window (no spread floor), the spread of
+    /// the window it was found in and the template's own spread (luma levels).
+    pub fn ping_detail(&self, views: &[FrameView], client_origin: (i32, i32)) -> (f32, f32, f32) {
+        let (score, spread) = self.ping.score_detail(views, client_origin, 0.0);
+        (score, spread, self.ping.spread())
+    }
+
+    /// Development: as `ping_detail`, for the minimap's M box.
+    pub fn m_key_detail(&self, views: &[FrameView], client_origin: (i32, i32)) -> (f32, f32, f32) {
+        let (score, spread) = self.m_key.score_detail(views, client_origin, 0.0);
+        (score, spread, self.m_key.spread())
+    }
+
     pub fn read(&self, view: &FrameView, client_origin: (i32, i32)) -> ViewCues {
         self.read_views(std::slice::from_ref(view), client_origin)
     }
@@ -372,5 +408,33 @@ impl CueReader {
             remove_hint_lead,
             m_key_min: self.m_key_min,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A flat bright patch where an icon would be (a white hull, a cloud) scores nothing, however
+    /// the rounding of its variance falls.
+    #[test]
+    fn a_flat_patch_is_not_an_icon() {
+        let (w, h) = (2560u32, 1368u32);
+        let data: Vec<u8> = (0..w * h)
+            .flat_map(|i| {
+                let v = 205 + ((i % 7 + i / w % 3) % 2) as u8;
+                [v, v, v]
+            })
+            .collect();
+        let cues = CueReader::new().read(&FrameView::rgb(&data, w, h), (0, 34));
+        assert!(cues.ping_score < PING_MIN_SCORE && cues.m_key_score < M_KEY_MIN_SCORE, "{cues:?}");
+    }
+
+    /// In the sight M opens the scope map: a Ping score there neither shows V1 nor hides V2.
+    #[test]
+    fn no_full_map_while_scoped() {
+        let scoped = ViewCues { ping_score: 0.9, m_key_score: 0.0, scope_black: 1.0, scope_lit: 0.8, remove_hint_lead: 0.0, m_key_min: M_KEY_MIN_SCORE };
+        assert_eq!(scoped.primary(), Some(MapView::Scope));
+        assert_eq!(ViewCues { scope_black: 0.0, ..scoped }.primary(), Some(MapView::Full));
     }
 }

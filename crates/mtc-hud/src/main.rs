@@ -2033,7 +2033,9 @@ fn main() {
     if let Some(log) = logfile::start(Instant::now(), !cfg!(feature = "gui")) {
         log::info!("Log file: {}", log.path().display());
     }
-    if already_running() {
+    // Hidden mode (development) draws nothing, so it may run beside the player's copy.
+    let hidden = std::env::args().any(|a| a == "--hidden");
+    if !hidden && already_running() {
         log::info!("Another copy is already running; this one ends");
         return;
     }
@@ -2046,7 +2048,7 @@ fn main() {
     let manual = parse_manual();
     let mirror = std::env::args().any(|a| a == "--mirror");
     let follow_tune = std::env::args().any(|a| a == "--follow-tune");
-    if std::env::args().any(|a| a == "--hidden") {
+    if hidden {
         mtc_overlay::HIDDEN.store(true, std::sync::atomic::Ordering::Relaxed);
         log::info!("Hidden mode: no windows, recognition and logging only");
     }
@@ -2091,7 +2093,15 @@ fn main() {
     if mirror {
         log::info!("Mirror mode: the aim strip shows the same text as the game's readout");
     }
+    let support = CaptureSupport::query();
+    let windows = diag::windows_version().unwrap_or_else(|| "Windows (version unknown)".into());
+    match support.defaults_kept() {
+        kept if kept.is_empty() => log::info!("{windows} · screen capture: every option available"),
+        kept => log::info!("{windows} · screen capture keeps this system's defaults: {}", kept.join(", ")),
+    }
     let mut waiting_said = false;
+    // Starts that failed in a row, and the last error (logged when it changes).
+    let (mut failures, mut last_error, mut told) = (0u32, String::new(), false);
     while !stop.load(Ordering::SeqCst) {
         let Some(window) = find_roblox() else {
             if !waiting_said {
@@ -2105,10 +2115,10 @@ fn main() {
         roblox_handle.store(window.as_raw_hwnd() as isize, Ordering::Relaxed);
         let settings = Settings::new(
             window,
-            CursorCaptureSettings::WithoutCursor,
-            DrawBorderSettings::WithoutBorder,
+            support.cursor(),
+            support.border(),
             SecondaryWindowSettings::Default,
-            MinimumUpdateIntervalSettings::Custom(CAPTURE_INTERVAL),
+            support.interval(),
             DirtyRegionSettings::Default,
             ColorFormat::Bgra8,
             Flags {
@@ -2126,18 +2136,99 @@ fn main() {
         );
         match Hud::start_free_threaded(settings) {
             Ok(capture) => {
+                (failures, told) = (0, false);
+                last_error.clear();
                 while !capture.is_finished() && !stop.load(Ordering::SeqCst) {
                     std::thread::sleep(Duration::from_millis(100));
                 }
                 let _ = capture.stop();
             }
             Err(error) => {
-                log::warn!("Capture failed to start: {error}");
+                let error = error.to_string();
+                if error != last_error {
+                    log::warn!("Capture failed to start: {error} (tried again every 2 s)");
+                    last_error.clone_from(&error);
+                }
+                failures += 1;
+                if failures >= CAPTURE_FAILURES_TOLD && !told {
+                    told = true;
+                    tell_capture_failed(error);
+                }
                 std::thread::sleep(Duration::from_secs(2));
             }
         }
     }
     tray.remove();
+}
+
+/// Failed starts in a row before the player is told nothing can show (a window still coming up
+/// can fail once or twice).
+const CAPTURE_FAILURES_TOLD: u32 = 3;
+
+/// Which capture options this Windows lets the calculator change. Turning the yellow capture
+/// border off came with Windows 10 2104 and Windows 11, leaving the cursor out with Windows 10
+/// 2004, a minimum frame interval with Windows 11 24H2. Asking for one the system lacks fails the
+/// whole capture, so each is asked for only where it exists; elsewhere the system default stays.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CaptureSupport {
+    cursor: bool,
+    border: bool,
+    interval: bool,
+}
+
+impl CaptureSupport {
+    /// What this system supports. `--capture-defaults` (development) acts as a system with none
+    /// of it.
+    fn query() -> Self {
+        use windows_capture::graphics_capture_api::GraphicsCaptureApi as Api;
+        if std::env::args().any(|a| a == "--capture-defaults") {
+            return Self { cursor: false, border: false, interval: false };
+        }
+        Self {
+            cursor: Api::is_cursor_settings_supported().unwrap_or(false),
+            border: Api::is_border_settings_supported().unwrap_or(false),
+            interval: Api::is_minimum_update_interval_supported().unwrap_or(false),
+        }
+    }
+
+    fn cursor(self) -> CursorCaptureSettings {
+        if self.cursor { CursorCaptureSettings::WithoutCursor } else { CursorCaptureSettings::Default }
+    }
+
+    fn border(self) -> DrawBorderSettings {
+        if self.border { DrawBorderSettings::WithoutBorder } else { DrawBorderSettings::Default }
+    }
+
+    /// Without the interval option frames come at most one per composition, capped near 60 a
+    /// second.
+    fn interval(self) -> MinimumUpdateIntervalSettings {
+        if self.interval { MinimumUpdateIntervalSettings::Custom(CAPTURE_INTERVAL) } else { MinimumUpdateIntervalSettings::Default }
+    }
+
+    /// What the player sees of the defaults this system keeps.
+    fn defaults_kept(self) -> Vec<&'static str> {
+        [
+            (self.border, "a yellow border round the game window"),
+            (self.cursor, "the cursor in the captured picture"),
+            (self.interval, "at most about 60 frames a second"),
+        ]
+        .into_iter()
+        .filter(|(supported, _)| !supported)
+        .map(|(_, kept)| kept)
+        .collect()
+    }
+}
+
+/// Tells the player once that nothing can show in the game: the capture keeps failing to start.
+/// On its own thread, so the calculator keeps trying meanwhile.
+fn tell_capture_failed(error: String) {
+    use windows::Win32::UI::WindowsAndMessaging::{MB_ICONWARNING, MB_OK, MessageBoxW};
+    std::thread::spawn(move || {
+        let text = windows::core::HSTRING::from(format!(
+            "MTC Calculator cannot capture the Roblox window, so nothing can show in the game.\n\n{error}\n\nPlease send the log folder to the developer: right-click the calculator's icon in the notification area at the bottom right of the screen, then Open log folder."
+        ));
+        unsafe { MessageBoxW(None, windows::core::PCWSTR(text.as_ptr()), windows::core::w!("MTC Calculator"), MB_OK | MB_ICONWARNING) };
+    });
 }
 
 /// Whether another copy of the calculator is running (two would draw over each other); that one
@@ -2171,5 +2262,25 @@ mod report_tests {
         let line = format!("Log file: {local}\\MTC Calculator\\logs\\hud.log");
         let scrubbed = super::scrub_paths(&line);
         assert_eq!(scrubbed, "Log file: %LOCALAPPDATA%\\MTC Calculator\\logs\\hud.log");
+    }
+}
+
+#[cfg(test)]
+mod capture_support_tests {
+    use super::*;
+
+    /// A system without the border and interval options gets their defaults, and the log says so;
+    /// one with every option gets none.
+    #[test]
+    fn an_old_system_keeps_its_defaults() {
+        let old = CaptureSupport { cursor: true, border: false, interval: false };
+        assert_eq!(old.cursor(), CursorCaptureSettings::WithoutCursor);
+        assert_eq!(old.border(), DrawBorderSettings::Default);
+        assert_eq!(old.interval(), MinimumUpdateIntervalSettings::Default);
+        assert_eq!(old.defaults_kept(), ["a yellow border round the game window", "at most about 60 frames a second"]);
+        let new = CaptureSupport { cursor: true, border: true, interval: true };
+        assert_eq!(new.border(), DrawBorderSettings::WithoutBorder);
+        assert_eq!(new.interval(), MinimumUpdateIntervalSettings::Custom(CAPTURE_INTERVAL));
+        assert!(new.defaults_kept().is_empty());
     }
 }

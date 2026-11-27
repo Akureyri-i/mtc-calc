@@ -102,6 +102,20 @@ fn views_and_maps_match_labels() {
     ids.require(1.0);
 }
 
+/// A flat bright patch where the Ping icon would be is not V1: on this frame (third person,
+/// minimap shown) the hint row's place is a white hull varying under a luma level.
+#[test]
+fn a_flat_patch_under_the_ping_place_is_not_v1() {
+    let path = datasets_dir().join("raw/20261124-051627/frames/000524401.png");
+    if !path.is_file() {
+        eprintln!("skipped: the recordings are not on this machine");
+        return;
+    }
+    let image = RgbImage::load_png(&path).expect("frame");
+    let view = FrameView::rgb(&image.data, image.width, image.height);
+    assert_eq!(CueReader::new().read(&view, (0, 34)).primary(), Some(MapView::Mini));
+}
+
 #[test]
 fn unknown_map_is_never_identified() {
     if !mtc_dataset::recordings_present() {

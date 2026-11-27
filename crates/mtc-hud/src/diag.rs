@@ -510,7 +510,7 @@ struct OsVersionInfo {
 }
 
 /// "Windows 11 (26200)": the major version and build.
-fn windows_version() -> Option<String> {
+pub fn windows_version() -> Option<String> {
     let mut info = OsVersionInfo { size: size_of::<OsVersionInfo>() as u32, major: 0, minor: 0, build: 0, platform: 0, csd: [0; 128] };
     if unsafe { RtlGetVersion(&mut info) } != 0 {
         return None;

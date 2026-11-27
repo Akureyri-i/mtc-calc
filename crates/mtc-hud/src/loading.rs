@@ -265,6 +265,18 @@ fn install_weapon_table() {
     }
 }
 
+/// Where the ammunition data tried again in the background arrives: one retry per run, shared by
+/// every pipeline (a capture started again makes a new one).
+fn ammo_retry_slot() -> std::sync::Arc<std::sync::Mutex<Option<AmmoData>>> {
+    static SLOT: std::sync::OnceLock<std::sync::Arc<std::sync::Mutex<Option<AmmoData>>>> = std::sync::OnceLock::new();
+    SLOT.get_or_init(|| {
+        let slot = std::sync::Arc::new(std::sync::Mutex::new(None));
+        retry_ammo_data(slot.clone());
+        slot
+    })
+    .clone()
+}
+
 /// The ammunition data not downloaded on a first start, tried again in the background
 /// (`retry::delay`) until it comes; handed over through `arrived`.
 fn retry_ammo_data(arrived: std::sync::Arc<std::sync::Mutex<Option<AmmoData>>>) {
@@ -290,9 +302,14 @@ fn retry_ammo_data(arrived: std::sync::Arc<std::sync::Mutex<Option<AmmoData>>>) 
         .expect("ammo retry thread");
 }
 
-/// Refreshes the downloaded wiki data that is missing or a day old, on a thread: the next start
-/// reads it. `shells`: the ammunition data comes from the cache (not `MTC_AMMO_DATA`).
+/// Refreshes the downloaded wiki data that is missing or a day old, on a thread, once per run:
+/// the next start reads it. `shells`: the ammunition data comes from the cache (not
+/// `MTC_AMMO_DATA`).
 fn refresh_wiki_data(shells: bool) {
+    static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if STARTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
     let shells = shells && mtc_ammo::fetch::stale(&mtc_ammo::fetch::shells_path());
     let weapons = mtc_ammo::fetch::stale(&mtc_ammo::fetch::weapons_path());
     if !shells && !weapons {
@@ -346,11 +363,11 @@ impl LoadingPipeline {
             }
             data
         });
-        let ammo_arrived = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let mut ammo_arrived = std::sync::Arc::new(std::sync::Mutex::new(None));
         if ammo.is_none() {
             log::info!("No ammunition data: only slots and charges are reported");
             if std::env::var_os("MTC_AMMO_DATA").is_none() {
-                retry_ammo_data(ammo_arrived.clone());
+                ammo_arrived = ammo_retry_slot();
             }
         }
         refresh_wiki_data(std::env::var_os("MTC_AMMO_DATA").is_none());

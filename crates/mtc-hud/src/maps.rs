@@ -555,6 +555,25 @@ fn load_library(slot: &Mutex<Option<Library>>, pace: bool) -> Vec<&'static MapIn
     absent
 }
 
+/// The live reference library, loaded on a thread once per run: a capture started again (after
+/// the game window came back, or a start that failed) shares it instead of downloading over.
+fn live_library() -> Arc<Mutex<Option<Library>>> {
+    static LIVE: std::sync::OnceLock<Arc<Mutex<Option<Library>>>> = std::sync::OnceLock::new();
+    LIVE.get_or_init(|| {
+        let library = Arc::new(Mutex::new(None));
+        let slot = library.clone();
+        let load = move || {
+            let absent = load_library(&slot, true);
+            // The pictures not downloaded are tried again in the background (from mainland China
+            // a quarter of China Unicom's attempts timed out).
+            retry_references(&slot, absent);
+        };
+        std::thread::Builder::new().name("map-library".into()).spawn(load).expect("map library thread");
+        library
+    })
+    .clone()
+}
+
 /// The map pictures that could not be downloaded, tried again (`retry::delay`) until all are in;
 /// the library is made again whenever one arrives.
 fn retry_references(slot: &Mutex<Option<Library>>, absent: Vec<&'static MapInfo>) {
@@ -618,25 +637,16 @@ impl MapPipeline {
         self.icon_scales[MapView::ALL.iter().position(|&v| v == view).unwrap_or(0)]
     }
 
-    /// `background`: load the reference library on a thread (live) or right away (replay).
+    /// `background`: the run's reference library, loaded once on a thread (live), or one loaded
+    /// right away (replay).
     pub fn new(background: bool) -> Self {
-        let library = Arc::new(Mutex::new(None));
-        let load = {
-            let library = library.clone();
-            move || {
-                let absent = load_library(&library, background);
-                // Live, the pictures not downloaded are tried again in the background (from
-                // mainland China a quarter of China Unicom's attempts timed out).
-                if background {
-                    retry_references(&library, absent);
-                }
-            }
-        };
-        if background {
-            std::thread::Builder::new().name("map-library".into()).spawn(load).expect("map library thread");
+        let library = if background {
+            live_library()
         } else {
-            load();
-        }
+            let library = Arc::new(Mutex::new(None));
+            load_library(&library, false);
+            library
+        };
         let library_for_ident = library.clone();
         Self {
             markers: MarkerReader::new(),

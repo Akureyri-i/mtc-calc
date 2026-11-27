@@ -290,10 +290,13 @@ impl PlanWindow {
 
     /// The card drawn offscreen where it would show.
     pub fn render_offscreen(graphics: &Rc<Graphics>, state: &PlanState) -> windows::core::Result<crate::Layer> {
-        let mut window = Self::with_surface(HWND::default(), Surface::offscreen(graphics, WIDTH as u32, LIMIT_HEIGHT as u32)?)?;
+        // Big enough for the card at its scale (live cards stay at 1 or below; renders for
+        // pictures go above).
+        let (surface_w, surface_h) = scaled(LIMIT_HEIGHT, state.scale.max(1.0));
+        let mut window = Self::with_surface(HWND::default(), Surface::offscreen(graphics, surface_w as u32, surface_h as u32)?)?;
         let (w, height) = scaled(window.draw(state)?, state.scale);
         let full = window.surface.pixels()?;
-        let row = WIDTH as usize * 4;
+        let row = surface_w as usize * 4;
         let bgra = (0..height as usize).flat_map(|y| full[y * row..y * row + w as usize * 4].iter().copied()).collect();
         Ok(crate::Layer { x: state.at.0, y: state.at.1, width: w as u32, height: height as u32, bgra })
     }

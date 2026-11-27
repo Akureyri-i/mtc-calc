@@ -14,3 +14,4 @@ serde = { version = "1", features = ["derive"] }
 mtc-capture = { path = "../mtc-capture" }
 mtc-dataset = { path = "../mtc-dataset" }
 mtc-vision = { path = "../mtc-vision" }
+png = "0.18.1"
