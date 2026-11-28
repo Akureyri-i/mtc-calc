@@ -30,11 +30,21 @@ pub struct SeatWatch {
     clicked_at: Option<u64>,
     click_line: Option<String>,
     last_line: Option<String>,
+    /// The player's own seat as last read, how many times it changed and how many times it
+    /// became the driver's (for the shot records).
+    own: Option<SeatKind>,
+    changes: u32,
+    driver_entries: u32,
 }
 
 impl SeatWatch {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// How many times the player's own seat changed, and became the driver's, so far.
+    pub fn seat_changes(&self) -> (u32, u32) {
+        (self.changes, self.driver_entries)
     }
 
     /// A left click at `pos` (frame px): on the menu as last read, it may change the seat.
@@ -71,6 +81,13 @@ impl SeatWatch {
         self.last_panel = panel;
         if let Some(m) = &menu {
             crate::diag::note(crate::diag::Event::SeatRead(m.own_known && m.mine().is_some()));
+            if let Some(kind) = m.mine().filter(|_| m.own_known)
+                && self.own != Some(kind)
+            {
+                self.changes += u32::from(self.own.is_some());
+                self.driver_entries += u32::from(kind == SeatKind::Driver);
+                self.own = Some(kind);
+            }
             let line = describe(m);
             if self.last_line.as_ref() != Some(&line) {
                 log::info!("{line}");

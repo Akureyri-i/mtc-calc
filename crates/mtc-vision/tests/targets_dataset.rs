@@ -159,6 +159,7 @@ fn check_session(session_id: &str, expected: &[(&str, &[&str])], markers: &mut T
                 TargetEvent::Moved(l) => format!("~{l}"),
                 TargetEvent::Cleared => "clear".into(),
                 TargetEvent::Series(c) => format!("series {c}"),
+                TargetEvent::Follow(c) => format!("follow {c}"),
             })
             .collect();
         events.check(&format!("{session_id}/{map_id}"), got == *want, || format!("events {got:?}, expected {want:?}"));
@@ -259,3 +260,68 @@ fn squad_markers_match_labels() {
 
 /// Measured on the labels: 11/21 frames.
 const SQUAD_ALL_MIN: f64 = 0.5;
+
+/// Following each member of a squad recording (Roinburg, 206–318 s: A11–A16, B21–B26 and the
+/// player's C1–C4 at the end), the labelled full-map frames in time order: the book follows A
+/// (the player's letter not learned: no input in the recording), then B from 289 s, then C from
+/// 293 s (new labels count from their second frame; the recording has no full-map frame between
+/// 238 and 289 s). Each letter is counted with its markers; after a switch the targets are that letter's
+/// markers and no other.
+#[test]
+fn each_squad_member_can_be_followed() {
+    if !mtc_dataset::recordings_present() {
+        eprintln!("skipped: the recordings are not on this machine");
+        return;
+    }
+    let id = "20261120-000720";
+    let Ok(session) = Session::open(datasets_dir().join("raw").join(id)) else {
+        eprintln!("squad follow: recording {id} not here, skipped");
+        return;
+    };
+    let info = mtc_maps::by_id("roinburg").expect("map");
+    let Ok(img) = mtc_maps::load_reference(info) else {
+        eprintln!("squad follow: no Roinburg reference in the cache, skipped");
+        return;
+    };
+    let mut registrar = V1Registrar::new(&MapReference::from_rgba(&info.id, info.size_m(), img.width, img.height, &img.data), info.grid_cell_m);
+    let reader = MarkerReader::new();
+    let mut book = TargetBook::default();
+    book.set_objectives(mtc_maps::objectives(&info.id).iter().map(|o| (o.u, o.v)).collect());
+    let mut labelled: Vec<_> = labels(id).expect("labels").into_iter().filter(|l| l.markers.is_some()).collect();
+    labelled.sort_by(|a, b| a.file.cmp(&b.file));
+    let mut phases: Vec<(char, Vec<String>)> = Vec::new();
+    let mut counted = None;
+    for label in &labelled {
+        let meta = session.frames.iter().find(|m| m.file == label.file).expect("frame");
+        let follow = if meta.t_ms >= 293_000 { 'C' } else if meta.t_ms >= 280_000 { 'B' } else { 'A' };
+        if book.series() != follow {
+            phases.push((book.series(), targets(&book)));
+            let events = book.follow(follow);
+            assert_eq!(events.last(), Some(&TargetEvent::Follow(follow)));
+            assert!(book.targets().is_empty());
+        }
+        let image = RgbImage::load_png(&session.frame_path(meta)).expect("frame");
+        let view = FrameView::rgb(&image.data, image.width, image.height);
+        let o = meta.geometry.client_in_frame();
+        let cursor = meta.cursor.map(|(x, y)| (f64::from(x) + 0.5, f64::from(y) + 0.5));
+        let Some(r) = registrar.register(&view, (o.x, o.y), cursor) else { continue };
+        let markers = reader.read(&view, &r.transform);
+        book.observe(&MapFrame { t_ms: meta.t_ms, transform: r.transform, markers: &markers, remove_hint: false, dragging: false, right_click: None, cursor, client_origin: (o.x, o.y), spot_clear: None, placed: None });
+        if meta.t_ms == 293_854 {
+            counted = Some(book.letters_seen());
+        }
+    }
+    phases.push((book.series(), targets(&book)));
+    println!("squad follow: {phases:?}; letters at 293.9 s {counted:?}");
+    let six = |letter: char, first: u32| (first..first + 6).map(|n| format!("{letter}{n}")).collect::<Vec<_>>();
+    assert_eq!(phases[0], ('A', six('A', 11)));
+    assert_eq!(phases[1], ('B', six('B', 21)));
+    assert_eq!(phases[2], ('C', vec!["C1".to_owned(), "C2".into(), "C3".into(), "C4".into()]));
+    assert_eq!(counted, Some(vec![('A', 6), ('B', 6), ('C', 4)]));
+}
+
+fn targets(book: &TargetBook) -> Vec<String> {
+    let mut l: Vec<String> = book.targets().iter().map(|t| t.label.clone()).collect();
+    l.sort_by_key(|l| l[1..].parse::<u32>().unwrap_or(0));
+    l
+}

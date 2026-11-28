@@ -11,3 +11,9 @@ debug = "line-tables-only"
 
 [profile.dev.package."*"]
 opt-level = 3
+
+# windows-capture 2.0.1 with one change: a Direct3D device below feature level 11.0 is used, and
+# the software renderer (WARP) stands in when no hardware device can be created
+# (`vendor/windows-capture/src/d3d11.rs`, `create_d3d_device`).
+[patch.crates-io]
+windows-capture = { path = "vendor/windows-capture" }

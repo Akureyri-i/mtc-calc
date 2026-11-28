@@ -29,7 +29,7 @@ use windows::Win32::Graphics::DirectWrite::{
     DWRITE_TRIMMING_GRANULARITY_CHARACTER, DWRITE_WORD_WRAPPING_NO_WRAP,
     DWRITE_FONT_WEIGHT, DWRITE_MEASURING_MODE_NATURAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
     DWRITE_TEXT_ALIGNMENT, DWriteCreateFactory, IDWriteFactory5, IDWriteFontCollection,
-    IDWriteFontCollection1, IDWriteRenderingParams, IDWriteTextFormat,
+    IDWriteFontCollection1, IDWriteFontFallback, IDWriteRenderingParams, IDWriteTextFormat, IDWriteTextFormat1,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC,
@@ -97,6 +97,9 @@ pub struct Graphics {
     factory: ID2D1Factory1,
     dwrite: IDWriteFactory5,
     fonts: Option<IDWriteFontCollection>,
+    /// Chinese characters in Microsoft YaHei UI at the run's weight, the rest as Windows falls back
+    /// (`chinese_fallback`).
+    fallback: Option<IDWriteFontFallback>,
     /// Rendering for strip labels and values, matched to the readout's (`text_params`).
     label_params: IDWriteRenderingParams,
     value_params: IDWriteRenderingParams,
@@ -118,7 +121,8 @@ impl Graphics {
                 dwrite.CreateCustomRenderingParams(1.0, 0.0, 0.0, 0.0, DWRITE_PIXEL_GEOMETRY_FLAT, DWRITE_RENDERING_MODE1_NATURAL_SYMMETRIC, DWRITE_GRID_FIT_MODE_DISABLED)?.cast::<IDWriteRenderingParams>()?
             };
             let devices = RefCell::new(Devices::new(&factory)?);
-            Ok(Rc::new(Self { factory, dwrite, fonts, label_params, value_params, unhinted_params, devices }))
+            let fallback = chinese_fallback(&dwrite).ok();
+            Ok(Rc::new(Self { factory, dwrite, fonts, fallback, label_params, value_params, unhinted_params, devices }))
         }
     }
 
@@ -188,6 +192,29 @@ pub struct Surface {
 /// (ink and fully covered pixels against the readout's): labels crisp — anti-aliased only
 /// horizontally — values anti-aliased both ways, both with gamma 1.0 (the defaults made labels
 /// blurrier and values ~10 % heavier than the readout's).
+/// A font fallback that draws Chinese characters (and their punctuation and full-width forms) in
+/// Microsoft YaHei UI, picking its face by the run's weight, then whatever Windows falls back to.
+/// Windows' own fallback mixed fonts glyph by glyph (with an English locale, Japanese ones) or lost
+/// the bold weight.
+fn chinese_fallback(dwrite: &IDWriteFactory5) -> windows::core::Result<IDWriteFontFallback> {
+    use windows::Win32::Graphics::DirectWrite::DWRITE_UNICODE_RANGE;
+    let ranges = [
+        DWRITE_UNICODE_RANGE { first: 0x2E80, last: 0x2FDF },
+        DWRITE_UNICODE_RANGE { first: 0x3000, last: 0x303F },
+        DWRITE_UNICODE_RANGE { first: 0x3400, last: 0x4DBF },
+        DWRITE_UNICODE_RANGE { first: 0x4E00, last: 0x9FFF },
+        DWRITE_UNICODE_RANGE { first: 0xF900, last: 0xFAFF },
+        DWRITE_UNICODE_RANGE { first: 0xFF00, last: 0xFFEF },
+    ];
+    let families = [windows::core::w!("Microsoft YaHei UI").as_ptr(), windows::core::w!("Microsoft YaHei").as_ptr()];
+    unsafe {
+        let builder = dwrite.CreateFontFallbackBuilder()?;
+        builder.AddMapping(&ranges, &families, None, windows::core::w!("zh-cn"), None, 1.0)?;
+        builder.AddMappings(&dwrite.GetSystemFontFallback()?)?;
+        builder.CreateFontFallback()
+    }
+}
+
 fn text_params(dwrite: &IDWriteFactory5) -> windows::core::Result<(IDWriteRenderingParams, IDWriteRenderingParams)> {
     use windows::Win32::Graphics::DirectWrite::{
         DWRITE_GRID_FIT_MODE_DEFAULT, DWRITE_PIXEL_GEOMETRY_FLAT, DWRITE_RENDERING_MODE1, DWRITE_RENDERING_MODE1_NATURAL,
@@ -443,10 +470,16 @@ impl Surface {
                 DWRITE_FONT_STYLE_NORMAL,
                 DWRITE_FONT_STRETCH_NORMAL,
                 size,
-                &HSTRING::from("en-us"),
+                // Chinese text falls back to a Chinese system font in one style (with an English
+                // locale Windows mixes Japanese and Chinese fonts glyph by glyph); the game's
+                // fonts draw the Latin text either way.
+                &HSTRING::from("zh-cn"),
             )?;
             format.SetTextAlignment(align)?;
             format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
+            if let Some(fallback) = &self.graphics.fallback {
+                format.cast::<IDWriteTextFormat1>()?.SetFontFallback(fallback)?;
+            }
             // One line; text too long for its box ends in an ellipsis.
             format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
             let ellipsis = self.graphics.dwrite.CreateEllipsisTrimmingSign(&format)?;

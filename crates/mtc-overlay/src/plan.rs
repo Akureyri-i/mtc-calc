@@ -24,6 +24,7 @@ use windows::Win32::Graphics::DirectWrite::{
 
 use crate::map_marks::CHARGE_COLORS;
 use crate::panel::{PanelAction, PanelLoad, inside, palette, rect};
+use crate::lang::{t, tf};
 use crate::render::{CapMetrics, Graphics, Surface, rgba};
 use crate::window;
 
@@ -71,6 +72,10 @@ const SHELL_H: f32 = 42.0;
 const MENU_ROW_H: f32 = 34.0;
 const MENU_TOP: f32 = 40.0;
 const GUN_H: f32 = 52.0;
+/// The squad row above the targets: whose markers the list follows.
+const SQUAD_H: f32 = 36.0;
+/// Where its letters start, clear of its title.
+const SQUAD_LETTERS_X: f32 = 104.0;
 /// Columns: the name's centre, the distance's right edge, the charge, the flight time, the
 /// precision's right edge.
 const COL_NAME: f32 = 38.0;
@@ -207,6 +212,23 @@ pub enum PlanNext {
     Nothing,
 }
 
+/// A squad member's letter on the squad row.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SquadLetter {
+    pub letter: char,
+    /// Markers of that letter on the map.
+    pub markers: u32,
+    /// The player's own letter.
+    pub own: bool,
+}
+
+/// The squad row: each letter with markers on the map, and the one whose markers are the targets.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SquadRow {
+    pub letters: Vec<SquadLetter>,
+    pub following: char,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlanState {
     /// Screen position of the card's top-left corner.
@@ -230,7 +252,7 @@ pub struct PlanState {
     pub next: PlanNext,
     pub detail: Option<PlanDetail>,
     pub gun_set: bool,
-    /// Where the gun position came from ("V1 arrow · ±0.9 m").
+    /// Where the gun position came from ("Map arrow · ±0.9 m").
     pub gun_source: Option<String>,
     /// What is missing for solutions.
     pub notice: Option<String>,
@@ -240,6 +262,8 @@ pub struct PlanState {
     pub settings_open: bool,
     /// Every target listed; folded, only the selected one.
     pub targets_open: bool,
+    /// The squad row (`None`: one letter's markers on the map, or none; the row does not show).
+    pub squad: Option<SquadRow>,
     /// The size the card is drawn at: 1, or smaller where it would not fit beside the full map of
     /// a smaller window (a planning card, kept readable while it fits).
     pub scale: f32,
@@ -277,6 +301,8 @@ pub struct PlanWindow {
     surface: Surface,
     fonts: Fonts,
     shown: Option<PlanState>,
+    /// The language it was drawn in (a change redraws it).
+    drawn_in: crate::lang::Language,
     placed: Option<(i32, i32, i32)>,
     hover: Option<(i32, i32)>,
     hits: Vec<(D2D_RECT_F, PanelAction)>,
@@ -340,7 +366,7 @@ impl PlanWindow {
             tag_right: font(12.0, bold, r)?,
             button: font(14.0, bold, c)?,
         };
-        Ok(Self { hwnd, surface, fonts, shown: None, placed: None, hover: None, hits: Vec::new(), hover_row: None, press: None, capacity: 1.0 })
+        Ok(Self { hwnd, surface, fonts, shown: None, drawn_in: crate::lang::Language::English, placed: None, hover: None, hits: Vec::new(), hover_row: None, press: None, capacity: 1.0 })
     }
 
     pub fn hwnd(&self) -> HWND {
@@ -367,7 +393,7 @@ impl PlanWindow {
             }
             return Ok(());
         };
-        if self.shown.as_ref() == Some(state) {
+        if self.shown.as_ref() == Some(state) && self.drawn_in == crate::lang::language() {
             return Ok(());
         }
         // A card drawn above the surface's scale (the game's HUD is larger than at the reference):
@@ -384,6 +410,7 @@ impl PlanWindow {
             self.placed = Some(at);
         }
         self.shown = Some(state.clone());
+        self.drawn_in = crate::lang::language();
         Ok(())
     }
 
@@ -447,6 +474,9 @@ impl PlanWindow {
 
     fn height_without_profile(state: &PlanState) -> f32 {
         let mut h = CAPTION_H + GUN_H;
+        if state.squad.is_some() {
+            h += SQUAD_H;
+        }
         if state.notice.is_some() {
             h += NOTICE_H;
         }
@@ -521,26 +551,26 @@ impl PlanWindow {
     fn terrain_note(&self, note: &TerrainNote, x: f32, right: f32, cy: f32) -> windows::core::Result<()> {
         let p = palette();
         let f = &self.fonts;
-        let arc = |high: bool| if high { "HIGH" } else { "LOW" };
+        let arc = |high: bool| if high { t("common.high") } else { t("common.low") };
         match note {
-            TerrainNote::Clear => self.txt("arc clears the ground", &f.value16, x, right, cy, p.grey),
+            TerrainNote::Clear => self.txt(t("terrain.clear"), &f.value16, x, right, cy, p.grey),
             TerrainNote::OtherArc { high, at_m, hard, .. } => {
-                let what = if *hard { "hits terrain" } else { "may be blocked" };
-                self.txt(&format!("{} {what} at {} m", arc(*high), thousands(f64::from(*at_m))), &f.value16, x, right, cy, p.amber)
+                let key = if *hard { "terrain.hits_at" } else { "terrain.may_block_at" };
+                self.txt(&tf(key, &[&arc(*high), &thousands(f64::from(*at_m))]), &f.value16, x, right, cy, p.amber)
             }
             TerrainNote::LoadedCharge { name, index, at_m } => {
                 let color = charge_color(*index);
                 self.pills(x, cy, index + 1, color);
                 self.txt(name, &f.value16, x + 30.0, right, cy, color);
                 let nx = x + 30.0 + self.width(name, &f.value16)? + 6.0;
-                self.txt(&format!("hits terrain at {} m", thousands(f64::from(*at_m))), &f.value16, nx, right, cy, p.amber);
+                self.txt(&tf("terrain.loaded_hits_at", &[&thousands(f64::from(*at_m))]), &f.value16, nx, right, cy, p.amber);
             }
-            TerrainNote::Skims { high, at_m } => self.txt(&format!("{} skims the ground at {} m", arc(*high), thousands(f64::from(*at_m))), &f.value16, x, right, cy, p.amber),
+            TerrainNote::Skims { high, at_m } => self.txt(&tf("terrain.skims_at", &[&arc(*high), &thousands(f64::from(*at_m))]), &f.value16, x, right, cy, p.amber),
             TerrainNote::Used { high, at_m, auto, hard } => {
                 let text = match (hard, auto) {
-                    (true, true) => format!("no arc clears · {} hits terrain at {} m", arc(*high), thousands(f64::from(*at_m))),
-                    (true, false) => format!("{} hits terrain at {} m", arc(*high), thousands(f64::from(*at_m))),
-                    (false, _) => format!("{} may be blocked at {} m", arc(*high), thousands(f64::from(*at_m))),
+                    (true, true) => tf("terrain.none_clears", &[&arc(*high), &thousands(f64::from(*at_m))]),
+                    (true, false) => tf("terrain.hits_at", &[&arc(*high), &thousands(f64::from(*at_m))]),
+                    (false, _) => tf("terrain.may_block_at", &[&arc(*high), &thousands(f64::from(*at_m))]),
                 };
                 self.txt(&text, &f.value16, x, right, cy, p.amber);
             }
@@ -666,6 +696,44 @@ impl PlanWindow {
             sep(y);
         }
 
+        // Whose markers the list follows: each letter with markers on the map, the player's
+        // marked, the one followed as a selection (an amber tint and frame); a click follows it.
+        if let Some(squad) = &state.squad {
+            let cy = y + SQUAD_H / 2.0;
+            self.txt(t("plan.markers"), &f.title, PAD, w, cy, p.grey);
+            let mut x = SQUAD_LETTERS_X;
+            for l in &squad.letters {
+                let letter = l.letter.to_string();
+                let count = l.markers.to_string();
+                let (lw, cw) = (self.width(&letter, &f.arc)?, self.width(&count, &f.small)?);
+                let you = if l.own { 8.0 + self.width(t("plan.you"), &f.tag)? } else { 0.0 };
+                let chip = rect(x, cy - 13.0, x + 12.0 + lw + 8.0 + cw + you + 12.0, cy + 13.0);
+                let following = l.letter == squad.following;
+                let hovered = self.hovered(&chip);
+                if following {
+                    s.fill_rect(chip, rgba(228, 174, 71, if hovered { 0.26 } else { 0.18 }));
+                    s.stroke_rect(chip, p.amber, 1.0);
+                } else {
+                    if hovered {
+                        s.fill_rect(chip, p.hover);
+                    }
+                    s.stroke_rect(chip, if hovered { p.white } else { edge }, 1.0);
+                }
+                let mut tx = chip.left + 12.0;
+                self.txt(&letter, &f.arc, tx, tx + lw + 2.0, cy, p.white);
+                tx += lw + 8.0;
+                self.txt(&count, &f.small, tx, tx + cw + 2.0, cy, if following { p.grey } else { p.dim });
+                if l.own {
+                    tx += cw + 8.0;
+                    self.txt(t("plan.you"), &f.tag, tx, chip.right, cy, if following { p.amber } else { p.grey });
+                }
+                hits.push((chip, PanelAction::Follow(l.letter)));
+                x = chip.right + 8.0;
+            }
+            y += SQUAD_H;
+            sep(y);
+        }
+
         // The targets: the caption row folds the list to the selected target (as TERRAIN).
         let cy = y + CAPTION_H / 2.0;
         let caption = rect(0.0, y, w, y + CAPTION_H);
@@ -673,10 +741,10 @@ impl PlanWindow {
         if caption_hovered {
             s.fill_rect(caption, p.hover);
         }
-        self.txt("TARGETS", &f.title, PAD, w, cy, p.grey);
-        self.txt("DISTANCE", &f.caption_right, 0.0, COL_DIST, cy, p.grey);
-        self.txt("CHARGE", &f.caption, COL_CHARGE, w, cy, p.grey);
-        self.txt("FLIGHT", &f.caption, COL_FLIGHT, w, cy, p.grey);
+        self.txt(t("common.targets"), &f.title, PAD, w, cy, p.grey);
+        self.txt(t("common.distance"), &f.caption_right, 0.0, COL_DIST, cy, p.grey);
+        self.txt(t("common.charge"), &f.caption, COL_CHARGE, w, cy, p.grey);
+        self.txt(t("plan.flight"), &f.caption, COL_FLIGHT, w, cy, p.grey);
         self.txt("± m", &f.caption_right, 0.0, COL_PREC, cy, p.grey);
         let fold = rect(w - PAD - 26.0, cy - 11.0, w - PAD, cy + 11.0);
         s.stroke_rect(fold, if caption_hovered { p.white } else { edge }, 1.0);
@@ -724,7 +792,7 @@ impl PlanWindow {
                     self.arc_icon(COL_FLIGHT, cy + 5.0, 22.0, 11.0, row.high_arc, p.grey)?;
                     self.txt(&format!("{t:.1} s"), &f.value16, COL_FLIGHT + 30.0, COL_PREC - 26.0, cy, fg);
                 }
-                (_, None) if !row.reachable => self.txt("out of range", &f.small, COL_CHARGE, COL_PREC, cy, fg),
+                (_, None) if !row.reachable => self.txt(t("common.out_of_range"), &f.small, COL_CHARGE, COL_PREC, cy, fg),
                 _ => {}
             }
             if let Some((m, coarse)) = row.precision {
@@ -743,16 +811,16 @@ impl PlanWindow {
             s.stroke_rect(rect(PAD + 1.0, y + 12.0, PAD + 55.0, y + DETAIL_H - 12.0), p.amber, 2.0);
             self.txt(&d.label, &f.name, PAD, PAD + 56.0, cy, p.white);
             let columns = [86.0, 178.0, 270.0];
-            self.txt("HEIGHT", &f.caption, columns[0], w, cy - 9.0, p.grey);
+            self.txt(t("common.height"), &f.caption, columns[0], w, cy - 9.0, p.grey);
             self.txt(&format!("{:+.1} m", d.height_m), &f.value16, columns[0], w, cy + 10.0, p.white);
-            self.txt("AZIMUTH", &f.caption, columns[1], w, cy - 9.0, p.grey);
+            self.txt(t("common.azimuth"), &f.caption, columns[1], w, cy - 9.0, p.grey);
             self.txt(&format!("{:06.2}°", d.azimuth), &f.value16, columns[1], w, cy + 10.0, p.white);
             if let Some((m, coarse)) = d.precision {
-                self.txt("PRECISION", &f.caption, columns[2], w, cy - 9.0, p.grey);
+                self.txt(t("plan.precision"), &f.caption, columns[2], w, cy - 9.0, p.grey);
                 self.txt(&format!("±{m:.1} m"), &f.value16, columns[2], w, cy + 10.0, if coarse { p.amber } else { p.white });
             }
             if let Some((reach, kill)) = d.blast_m {
-                self.txt("BLAST", &f.caption_right, 0.0, w - PAD, cy - 9.0, p.grey);
+                self.txt(t("plan.blast"), &f.caption_right, 0.0, w - PAD, cy - 9.0, p.grey);
                 self.txt(&format!("{reach:.1} / {kill:.1} m"), &f.value16_right, 0.0, w - PAD, cy + 10.0, p.white);
             }
             y += DETAIL_H;
@@ -762,7 +830,7 @@ impl PlanWindow {
             let (bx0, bx1, by0, by1) = (14.0, w - 14.0, y + 12.0, y + ARC_H - 12.0);
             s.stroke_rect(rect(bx0 + 0.5, by0 + 0.5, bx1 - 0.5, by1 - 0.5), edge, 1.0);
             let half = (bx1 - bx0) / 2.0;
-            for (i, (name, arc)) in [("LOW", d.low), ("HIGH", d.high)].into_iter().enumerate() {
+            for (i, (name, arc)) in [(t("common.low"), d.low), (t("common.high"), d.high)].into_iter().enumerate() {
                 let x0 = bx0 + half * i as f32;
                 let cell = rect(x0 + 1.0, by0 + 1.0, x0 + half - 1.0, by1 - 1.0);
                 let chosen = arc.is_some() && d.high_chosen == (i == 1);
@@ -785,9 +853,9 @@ impl PlanWindow {
                 // The terrain stops it before it was chosen automatically; something narrower
                 // may (a hint).
                 let tag = match (arc.and_then(|a| a.blocked_m), arc.and_then(|a| a.hint_m), chosen && d.auto) {
-                    (Some(_), _, _) => Some(("BLOCKED", if chosen { p.ink_alert } else { p.amber })),
-                    (None, Some(_), _) => Some(("MAY HIT", if chosen { p.ink } else { p.amber })),
-                    (None, None, true) => Some(("AUTO", sc)),
+                    (Some(_), _, _) => Some((t("plan.blocked"), if chosen { p.ink_alert } else { p.amber })),
+                    (None, Some(_), _) => Some((t("plan.may_hit"), if chosen { p.ink } else { p.amber })),
+                    (None, None, true) => Some((t("plan.auto"), sc)),
                     (None, None, false) => None,
                 };
                 if let Some((tag, color)) = tag {
@@ -822,7 +890,7 @@ impl PlanWindow {
                     s.fill_rect(row, p.hover);
                 }
                 let cy = y + TERRAIN_H / 2.0;
-                self.txt("TERRAIN", &f.title, PAD, w, cy, p.grey);
+                self.txt(crate::lang::t("plan.terrain"), &f.title, PAD, w, cy, p.grey);
                 self.terrain_note(&t.note, VALUE_X, w - PAD - 36.0, cy)?;
                 let b = rect(w - PAD - 26.0, cy - 13.0, w - PAD, cy + 13.0);
                 s.stroke_rect(b, if hovered { p.white } else { edge }, 1.0);
@@ -843,7 +911,7 @@ impl PlanWindow {
         // the charges.
         if state.shell.is_some() || state.detail.is_some() {
             let cy = y + 21.0;
-            self.txt("SHELL", &f.title, PAD, w, cy, p.grey);
+            self.txt(t("common.shell"), &f.title, PAD, w, cy, p.grey);
             let mut x = VALUE_X;
             let value_box = rect(VALUE_X - 8.0, y + 5.0, w - 100.0, y + 37.0);
             if state.menu.as_ref().is_some_and(|m| m.open) || (state.menu.is_some() && self.hovered(&value_box)) {
@@ -864,13 +932,13 @@ impl PlanWindow {
                     end = cx + 30.0 + self.width(name, &f.value16)?;
                 }
             } else {
-                self.txt("none known", &f.value16, x, w, cy, p.dim);
-                end = x + self.width("none known", &f.value16)?;
+                self.txt(t("plan.none_known"), &f.value16, x, w, cy, p.dim);
+                end = x + self.width(t("plan.none_known"), &f.value16)?;
             }
             if let Some(menu) = &state.menu {
                 if menu.manual {
-                    self.txt("MANUAL", &f.tag, end + 10.0, w, cy, p.amber);
-                    end += 10.0 + self.width("MANUAL", &f.tag)?;
+                    self.txt(t("common.manual"), &f.tag, end + 10.0, w, cy, p.amber);
+                    end += 10.0 + self.width(t("common.manual"), &f.tag)?;
                 }
                 let (cx, open) = (end + 14.0, menu.open);
                 let caret = if open { [(cx - 5.0, cy + 2.5), (cx + 5.0, cy + 2.5), (cx, cy - 3.0)] } else { [(cx - 5.0, cy - 2.5), (cx + 5.0, cy - 2.5), (cx, cy + 3.0)] };
@@ -878,9 +946,9 @@ impl PlanWindow {
                 hits.push((value_box, PanelAction::Menu(!open)));
             }
             let (tag, color) = match state.load {
-                PanelLoad::Loaded => ("LOADED", p.green),
-                PanelLoad::Loading => ("LOADING", p.amber),
-                PanelLoad::Fired => ("EMPTY", p.amber),
+                PanelLoad::Loaded => (t("common.loaded"), p.green),
+                PanelLoad::Loading => (t("common.loading"), p.amber),
+                PanelLoad::Fired => (t("common.empty"), p.amber),
                 _ => ("", p.grey),
             };
             self.txt(tag, &f.tag_right, 0.0, w - PAD, cy, color);
@@ -915,28 +983,28 @@ impl PlanWindow {
             }
             if let Some(d) = &state.detail {
                 let ny = y + 50.0;
-                self.txt("NEXT", &f.title, PAD, w, ny, p.grey);
+                self.txt(t("plan.next"), &f.title, PAD, w, ny, p.grey);
                 let key = rect(VALUE_X, ny - 12.0, VALUE_X + 26.0, ny + 12.0);
                 let key_cap = |label: &str| {
                     s.rounded(key, 5.0, Some(rgba(214, 218, 212, 1.0)), None);
                     self.txt(label, &f.button, key.left, key.right, ny, p.ink);
                 };
                 match &state.next {
-                    PlanNext::Ready if state.load == PanelLoad::Loading => self.txt("loading the right charge", &f.value16, VALUE_X, w, ny, p.amber),
-                    PlanNext::Ready => self.txt("LOADED · ready to fire", &f.value16, VALUE_X, w, ny, p.green),
-                    PlanNext::Resupply => self.txt("pod empty · resupply first", &f.value16, VALUE_X, w, ny, p.amber),
+                    PlanNext::Ready if state.load == PanelLoad::Loading => self.txt(t("plan.loading_right_charge"), &f.value16, VALUE_X, w, ny, p.amber),
+                    PlanNext::Ready => self.txt(t("plan.ready"), &f.value16, VALUE_X, w, ny, p.green),
+                    PlanNext::Resupply => self.txt(t("plan.resupply"), &f.value16, VALUE_X, w, ny, p.amber),
                     PlanNext::Load(name, index) => {
                         key_cap("M");
-                        self.txt("then load", &f.value16, key.right + 10.0, w, ny, p.white);
-                        let x = key.right + 10.0 + self.width("then load", &f.value16)? + 8.0;
+                        self.txt(t("plan.then_load"), &f.value16, key.right + 10.0, w, ny, p.white);
+                        let x = key.right + 10.0 + self.width(t("plan.then_load"), &f.value16)? + 8.0;
                         self.pills(x, ny, index + 1, charge_color(*index));
                         self.txt(name, &f.value16, x + 30.0, w, ny, charge_color(*index));
                     }
                     PlanNext::LoadShell => {
                         key_cap("M");
-                        self.txt("then load a shell", &f.value16, key.right + 10.0, w, ny, p.white);
+                        self.txt(t("plan.then_load_shell"), &f.value16, key.right + 10.0, w, ny, p.white);
                     }
-                    PlanNext::Nothing => self.txt("no charge of this shell reaches it", &f.value16, VALUE_X, w, ny, p.dim),
+                    PlanNext::Nothing => self.txt(t("plan.no_charge_reaches"), &f.value16, VALUE_X, w, ny, p.dim),
                 }
                 let n = d.charges.len().max(1) as f32;
                 let cw = (w - 28.0 - 8.0 * (n - 1.0)) / n;
@@ -957,7 +1025,7 @@ impl PlanWindow {
                         hits.push((b, PanelAction::Pick(crate::panel::MenuPick::Charge(if c.loaded && manual { None } else { Some(c.index) }))));
                     }
                     let manual = c.loaded && state.charge_manual == Some(true);
-                    let legend = if manual { "MANUAL" } else { "LOADED" };
+                    let legend = if manual { crate::lang::t("common.manual") } else { crate::lang::t("common.loaded") };
                     let gap = if c.loaded {
                         let tw = self.width(legend, &f.tag)?;
                         Some((b.right - 12.0 - tw - 5.0, b.right - 12.0 + 5.0))
@@ -992,8 +1060,8 @@ impl PlanWindow {
 
         // Where the gun position came from; take it again.
         let cy = y + GUN_H / 2.0;
-        self.txt("GUN", &f.title, PAD, w, cy, p.grey);
-        let source = state.gun_source.as_deref().unwrap_or("unknown: zoom in on your arrow");
+        self.txt(t("plan.gun"), &f.title, PAD, w, cy, p.grey);
+        let source = state.gun_source.as_deref().unwrap_or(t("plan.gun_unknown"));
         self.txt(source, &f.value16, VALUE_X, w - PAD - 150.0 - 46.0, cy, if state.gun_set { p.white } else { p.amber });
         let gear = rect(w - PAD - 144.0 - 46.0, y + 11.0, w - PAD - 152.0, y + GUN_H - 11.0);
         let gear_hover = self.hovered(&gear);
@@ -1004,10 +1072,10 @@ impl PlanWindow {
         if state.gun_set {
             let hover = self.hovered(&gun);
             s.rounded(gun, 6.0, Some(if hover { rgba(44, 52, 58, 0.95) } else { rgba(24, 30, 34, 0.95) }), Some((if hover { p.white } else { edge }, 1.0)));
-            self.txt("UPDATE GUN", &f.button, gun.left, gun.right, cy, p.white);
+            self.txt(t("common.update_gun"), &f.button, gun.left, gun.right, cy, p.white);
         } else {
             s.rounded(gun, 6.0, Some(p.amber), None);
-            self.txt("SET GUN", &f.button, gun.left, gun.right, cy, p.ink);
+            self.txt(t("common.set_gun"), &f.button, gun.left, gun.right, cy, p.ink);
         }
         hits.push((gun, PanelAction::UpdateGun));
         s.end()?;

@@ -223,6 +223,11 @@ fn as_digits(text: &str) -> String {
 
 /// Calibre and model of a weapon name or label: "155 mm M284", "155mm M284", "152.4 mm 2A64",
 /// and the data's model-first names, "L9A1 165mm" (the screen shows "165 mm L9A1").
+/// Weapons the game labels unlike the data's name: the label as the screen shows it, and the
+/// data's name. The RBT-5's torpedo shows "420 mm Rocket Launcher" (read on players' screens as
+/// "420mm Rockot Launcher" and "420mm Pocket Launcher"; players picked the torpedo by hand there).
+const SCREEN_NAMES: &[(&str, &str)] = &[("420 mm Rocket Launcher", "TT-250 Tank Torpedo")];
+
 fn calibre_and_model(text: &str) -> Option<(u32, String)> {
     let tokens: Vec<&str> = text.split_whitespace().collect();
     if let [model, calibre] = tokens.as_slice()
@@ -482,21 +487,31 @@ impl AmmoData {
         self.weapons.get(weapon).map_or(&[], Vec::as_slice)
     }
 
+    /// The names a label can be compared with, each with the data's weapon it stands for: every
+    /// weapon's own name, and the screen's names for weapons the game labels unlike the data
+    /// (`SCREEN_NAMES`).
+    fn names(&self) -> impl Iterator<Item = (&str, &str)> {
+        let own = self.weapons.keys().map(|name| (name.as_str(), name.as_str()));
+        let screen = SCREEN_NAMES.iter().filter_map(|&(shown, data)| self.weapons.get_key_value(data).map(|(name, _)| (shown, name.as_str())));
+        own.chain(screen)
+    }
+
     /// The weapon a label on screen names.
     pub fn weapon_for_label(&self, label: &str) -> Option<&str> {
         let Some((calibre, model)) = calibre_and_model(label) else { return self.named_whole(label) };
         // Same calibre; the model closest by edit distance (the whole model, not a prefix).
         let scored: Vec<(usize, &str)> = self
-            .weapons
-            .keys()
-            .filter_map(|name| {
-                let (c, m) = calibre_and_model(name)?;
+            .names()
+            .filter_map(|(text, name)| {
+                let (c, m) = calibre_and_model(text)?;
                 let distance = prefix_distance(&m, &model) + m.chars().count().saturating_sub(model.chars().count());
-                (c == calibre).then_some((distance, name.as_str()))
+                (c == calibre).then_some((distance, name))
             })
             .collect();
         let best = scored.iter().map(|s| s.0).min()?;
-        let winners: Vec<&str> = scored.iter().filter(|s| s.0 == best).map(|s| s.1).collect();
+        let mut winners: Vec<&str> = scored.iter().filter(|s| s.0 == best).map(|s| s.1).collect();
+        winners.sort_unstable();
+        winners.dedup();
         (best <= allowed_errors(&model) && winners.len() == 1).then(|| winners[0])
     }
 
@@ -509,19 +524,21 @@ impl AmmoData {
         let Some((calibre, model)) = calibre_and_model(label) else { return self.named_whole(label) };
         let allowed = allowed_errors(&model) + 1;
         let mut scored: Vec<(usize, usize, &str)> = self
-            .weapons
-            .iter()
-            .filter_map(|(name, shells)| {
-                let (c, m) = calibre_and_model(name)?;
+            .names()
+            .filter_map(|(text, name)| {
+                let shells = self.shells(name);
+                let (c, m) = calibre_and_model(text)?;
                 let distance = prefix_distance(&m, &model) + m.chars().count().saturating_sub(model.chars().count());
                 let hits = cards
                     .iter()
                     .map(|card| card.trim_end_matches(['.', ' ']).trim())
                     .filter(|card| shells.iter().any(|s| prefix_distance(&s.name, card) <= allowed_errors(card)))
                     .count();
-                (c == calibre).then_some((hits, distance, name.as_str()))
+                (c == calibre).then_some((hits, distance, name))
             })
             .collect();
+        scored.sort_by_key(|&(hits, distance, name)| (name, distance, std::cmp::Reverse(hits)));
+        scored.dedup_by_key(|s| s.2);
         // Cards that fit another weapon of the calibre and none of a candidate's shells say it is not
         // that weapon: a label misread short fits one by its model's prefix alone ("155 mm L" for
         // "155 mm M284" took the L62 over the M284's own M107 and M110 cards at 100 %, 1366x768).
@@ -563,14 +580,14 @@ impl AmmoData {
         let Some((calibre, model)) = calibre_and_model(label) else { return self.named_whole(label).into_iter().collect() };
         let allowed = allowed_errors(&model) + 1;
         let mut out: Vec<&str> = self
-            .weapons
-            .keys()
-            .filter(|name| {
-                calibre_and_model(name).is_some_and(|(c, m)| c == calibre && prefix_distance(&m, &model) + m.chars().count().saturating_sub(model.chars().count()) <= allowed)
+            .names()
+            .filter(|(text, _)| {
+                calibre_and_model(text).is_some_and(|(c, m)| c == calibre && prefix_distance(&m, &model) + m.chars().count().saturating_sub(model.chars().count()) <= allowed)
             })
-            .map(String::as_str)
+            .map(|(_, name)| name)
             .collect();
         out.sort_unstable();
+        out.dedup();
         out
     }
 
@@ -674,6 +691,11 @@ impl AmmoData {
                 if !out.contains(&label) {
                     out.push(label);
                 }
+            }
+        }
+        for &(shown, data) in SCREEN_NAMES {
+            if self.weapons.contains_key(data) && !out.iter().any(|l| l == shown) {
+                out.push(shown.to_owned());
             }
         }
         out
@@ -834,6 +856,25 @@ mod tests {
         assert_eq!(data.weapon_for_label("155 mm M185"), Some("155mm M185"), "calibres as before");
         let labels = data.label_texts();
         assert!(labels.iter().any(|l| l == "Rocketetet") && !labels.iter().any(|l| l == "FB-10A"));
+    }
+
+    /// A weapon the game labels unlike the data (the RBT-5's torpedo, "420 mm Rocket Launcher") is
+    /// found by the screen's label, as read on players' screens.
+    #[test]
+    fn screen_names_unlike_the_data_name_their_weapon() {
+        let path = "../../reference/wiki/production-1.0.0/20261117/shells.json";
+        let Ok(json) = std::fs::read_to_string(path) else {
+            eprintln!("skipped: the wiki data snapshot is not on this machine");
+            return;
+        };
+        let data = AmmoData::from_json(&json).expect("shells");
+        for label in ["420 mm Rocket Launcher", "420mm Rockot Launcher", "420mm Pocket Launcher", "420mm Pockef Launcher"] {
+            assert_eq!(data.weapon_for_label(label), Some("TT-250 Tank Torpedo"), "{label}");
+            assert_eq!(data.weapon_for_label_and_cards(label, &[]), Some("TT-250 Tank Torpedo"), "{label}");
+            assert_eq!(data.label_weapons(label), ["TT-250 Tank Torpedo"], "{label}");
+        }
+        assert!(data.label_texts().iter().any(|l| l == "420 mm Rocket Launcher"));
+        assert_eq!(data.weapon_for_label("420 mm M269"), None, "another 420 mm model");
     }
 
     #[test]

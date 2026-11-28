@@ -31,6 +31,7 @@ use windows::Win32::Graphics::DirectWrite::{
     DWRITE_TEXT_ALIGNMENT_TRAILING, IDWriteTextFormat,
 };
 
+use crate::lang::{t, tf};
 use crate::render::{Graphics, Surface, rgba};
 use crate::window;
 
@@ -210,6 +211,8 @@ pub enum ConsentChoice {
 #[derive(Clone, Debug, PartialEq)]
 pub enum PanelAction {
     Diag(DiagAction),
+    /// Follow this squad letter's markers (the plan panel's squad row).
+    Follow(char),
     Consent(ConsentChoice),
     Select(String),
     UpdateGun,
@@ -259,6 +262,8 @@ pub struct PanelWindow {
     headline: IDWriteTextFormat,
     button: IDWriteTextFormat,
     shown: Option<PanelState>,
+    /// The language it was drawn in (a change redraws it).
+    drawn_in: crate::lang::Language,
     /// Window position and height (screen px).
     placed: Option<(i32, i32, i32)>,
     /// The pointer over the card, in its scale-1 layout.
@@ -377,6 +382,7 @@ impl PanelWindow {
             hwnd,
             surface,
             shown: None,
+            drawn_in: crate::lang::Language::English,
             placed: None,
             hover: None,
             scale: 1.0,
@@ -415,7 +421,7 @@ impl PanelWindow {
             }
             return Ok(());
         };
-        if self.shown.as_ref() == Some(state) {
+        if self.shown.as_ref() == Some(state) && self.drawn_in == crate::lang::language() {
             return Ok(());
         }
         self.scale = state.scale;
@@ -436,6 +442,7 @@ impl PanelWindow {
             _ => self.place(anchor, width, height),
         }
         self.shown = Some(state.clone());
+        self.drawn_in = crate::lang::language();
         Ok(())
     }
 
@@ -585,7 +592,7 @@ impl PanelWindow {
         } else if let Some(sol) = &state.solution {
             s.flat_text(&format!("{:.0} m", sol.distance_m), &self.value, rect(x, 0.0, x + 100.0, h), p.white);
             let charge = match (&state.charge, &state.recommended) {
-                (now, Some(best)) if now.as_ref() != Some(best) => Some((format!("use {best}"), p.amber)),
+                (now, Some(best)) if now.as_ref() != Some(best) => Some((tf("panel.use", &[&best]), p.amber)),
                 (Some(now), _) => Some((now.clone(), p.white)),
                 (None, _) => None,
             };
@@ -593,7 +600,7 @@ impl PanelWindow {
                 s.flat_text(&text, &self.value_right, rect(w - PAD - 150.0, 0.0, w - PAD, h), color);
             }
         } else if state.selected.is_none() {
-            s.flat_text("No target selected", &self.label, rect(x, 0.0, w - PAD, h), p.dim);
+            s.flat_text(t("panel.no_target"), &self.label, rect(x, 0.0, w - PAD, h), p.dim);
         }
         s.stroke_rect(rect(0.0, 0.0, w, h), if state.locked { p.line } else { p.amber }, 1.0);
         s.end()?;
@@ -625,12 +632,12 @@ impl PanelWindow {
         let gear_color = if state.settings_open { p.amber } else if self.hovered(&gear) { p.white } else { p.grey };
         crate::settings::gear(s, GEAR_LEFT + 8.0, HEADER_H / 2.0, gear_color)?;
         self.hits.push((gear, PanelAction::Settings(!state.settings_open)));
-        s.flat_text("TARGETS", &self.label, rect(LABEL_LEFT, 0.0, 200.0, HEADER_H), p.grey);
+        s.flat_text(t("common.targets"), &self.label, rect(LABEL_LEFT, 0.0, 200.0, HEADER_H), p.grey);
         // Too coarse a location: what to do, in the free space of the header; the
         // amber precision under it names the target.
         if let (Some((_, true)), Some(_)) = (state.precision, &state.selected) {
-            let x = LABEL_LEFT + s.text_width("TARGETS", &self.label)? + 8.0;
-            s.flat_text("Zoom in V1", &self.caption, rect(x, 0.0, w - PAD - GUN_W - 4.0, HEADER_H), p.amber);
+            let x = LABEL_LEFT + s.text_width(t("common.targets"), &self.label)? + 8.0;
+            s.flat_text(t("panel.zoom_in_v1"), &self.caption, rect(x, 0.0, w - PAD - GUN_W - 4.0, HEADER_H), p.amber);
         }
         let gun = rect(w - PAD - GUN_W, 6.0, w - PAD, HEADER_H - 6.0);
         let gun_hover = self.hovered(&gun);
@@ -639,10 +646,10 @@ impl PanelWindow {
                 s.fill_rect(gun, p.hover);
             }
             s.stroke_rect(gun, if gun_hover { p.white } else { p.line }, 1.0);
-            s.flat_text("UPDATE GUN", &self.button, gun, p.white);
+            s.flat_text(t("common.update_gun"), &self.button, gun, p.white);
         } else {
             s.fill_rect(gun, p.amber);
-            s.flat_text("SET GUN", &self.button, gun, p.ink);
+            s.flat_text(t("common.set_gun"), &self.button, gun, p.ink);
         }
         self.hits.push((gun, PanelAction::UpdateGun));
         let mut y = HEADER_H;
@@ -690,15 +697,15 @@ impl PanelWindow {
         if let (Some(_), Some(sol)) = (&state.selected, &state.solution) {
             let columns = [PAD, PAD + 132.0];
             let (label_y, value_y) = (y + 6.0, y + 20.0);
-            for (x, name) in columns.iter().zip(["DISTANCE", "HEIGHT"]) {
+            for (x, name) in columns.iter().zip([t("common.distance"), t("common.height")]) {
                 s.flat_text(name, &self.caption, rect(*x, label_y, x + 110.0, label_y + 14.0), p.grey);
             }
             // The marker's precision right after DISTANCE; amber when too coarse.
             if let Some((metres, coarse)) = state.precision {
-                let x = columns[0] + s.text_width("DISTANCE", &self.caption)? + 6.0;
+                let x = columns[0] + s.text_width(t("common.distance"), &self.caption)? + 6.0;
                 s.flat_text(&format!("±{metres:.1} m"), &self.caption, rect(x, label_y, columns[1] - 4.0, label_y + 14.0), if coarse { p.amber } else { p.grey });
             }
-            s.flat_text("AZIMUTH", &self.caption_right, rect(w - PAD - 110.0, label_y, w - PAD, label_y + 14.0), p.grey);
+            s.flat_text(t("common.azimuth"), &self.caption_right, rect(w - PAD - 110.0, label_y, w - PAD, label_y + 14.0), p.grey);
             s.flat_text(&format!("{:.0} m", sol.distance_m), &self.headline, rect(columns[0], value_y, columns[1], value_y + 28.0), p.white);
             s.flat_text(&format!("{:+.1} m", sol.height_m), &self.value, rect(columns[1], value_y + 1.0, columns[1] + 100.0, value_y + 28.0), p.white);
             s.flat_text(&format!("{:06.2}°", sol.azimuth), &self.value_right, rect(w - PAD - 110.0, value_y + 1.0, w - PAD, value_y + 28.0), p.white);
@@ -706,7 +713,7 @@ impl PanelWindow {
             if state.notice.is_none() {
                 line(y);
                 // Two cells like the target cells: the chosen arc amber, the other one to click.
-                for (i, (name, arc)) in [("LOW", sol.low), ("HIGH", sol.high)].into_iter().enumerate() {
+                for (i, (name, arc)) in [(t("common.low"), sol.low), (t("common.high"), sol.high)].into_iter().enumerate() {
                     let x = i as f32 * w / 2.0;
                     let cell = rect(x, y + 1.0, x + w / 2.0, y + ROW_H);
                     let chosen = arc.is_some_and(|a| a.active);
@@ -740,7 +747,7 @@ impl PanelWindow {
             }
             line(y);
         } else if state.notice.is_none() && !state.targets.is_empty() {
-            s.flat_text("Select a target", &self.label, rect(PAD, y, w - PAD, y + ROW_H), p.dim);
+            s.flat_text(t("panel.select_target"), &self.label, rect(PAD, y, w - PAD, y + ROW_H), p.dim);
             y += ROW_H;
             line(y);
         }
@@ -763,15 +770,15 @@ impl PanelWindow {
 
         // Shell with its loading state; its charge with the recommended one when that differs.
         // With a list to pick from, the shell is a button: a caret after it, the list on a click.
-        s.flat_text("SHELL", &self.label, rect(PAD, y, PAD + 76.0, y + ROW_H), p.grey);
+        s.flat_text(t("common.shell"), &self.label, rect(PAD, y, PAD + 76.0, y + ROW_H), p.grey);
         let shell_box = rect(PAD + 70.0, y + 3.0, w - PAD - 80.0, y + ROW_H - 3.0);
         let mut caret_x = PAD + 76.0;
         match &state.shell {
             Some(shell) => {
                 let (tag, tag_color) = match state.load {
-                    PanelLoad::Loaded => ("LOADED", p.green),
-                    PanelLoad::Loading => ("LOADING", p.amber),
-                    PanelLoad::Fired => ("EMPTY", p.amber),
+                    PanelLoad::Loaded => (t("common.loaded"), p.green),
+                    PanelLoad::Loading => (t("common.loading"), p.amber),
+                    PanelLoad::Fired => (t("common.empty"), p.amber),
                     PanelLoad::Empty => ("", p.grey),
                 };
                 let mut x = PAD + 76.0;
@@ -797,8 +804,8 @@ impl PanelWindow {
             if menu.manual {
                 // Picked by hand: said in amber after the name.
                 let x = caret_x + 8.0;
-                s.flat_text("MANUAL", &self.caption, rect(x, y + 1.0, x + 60.0, y + ROW_H + 1.0), p.amber);
-                caret_x = x + s.text_width("MANUAL", &self.caption)?;
+                s.flat_text(t("common.manual"), &self.caption, rect(x, y + 1.0, x + 60.0, y + ROW_H + 1.0), p.amber);
+                caret_x = x + s.text_width(t("common.manual"), &self.caption)?;
             }
             let (cx, cy) = (caret_x + 11.0, y + ROW_H / 2.0);
             let caret = if menu.open { [(cx - 4.0, cy + 2.0), (cx + 4.0, cy + 2.0), (cx, cy - 2.5)] } else { [(cx - 4.0, cy - 2.0), (cx + 4.0, cy - 2.0), (cx, cy + 2.5)] };
@@ -815,7 +822,7 @@ impl PanelWindow {
                 y = below;
             }
             line(y);
-            s.flat_text("CHARGE", &self.label, rect(PAD, y, PAD + 76.0, y + ROW_H), p.grey);
+            s.flat_text(t("common.charge"), &self.label, rect(PAD, y, PAD + 76.0, y + ROW_H), p.grey);
             let mut caret_x = PAD + 76.0;
             match &state.charge {
                 Some(now) => {
@@ -837,8 +844,8 @@ impl PanelWindow {
                 }
                 if menu.manual {
                     let x = caret_x + 8.0;
-                    s.flat_text("MANUAL", &self.caption, rect(x, y + 1.0, x + 60.0, y + ROW_H + 1.0), p.amber);
-                    caret_x = x + s.text_width("MANUAL", &self.caption)?;
+                    s.flat_text(t("common.manual"), &self.caption, rect(x, y + 1.0, x + 60.0, y + ROW_H + 1.0), p.amber);
+                    caret_x = x + s.text_width(t("common.manual"), &self.caption)?;
                 }
                 let (cx, cy) = (caret_x + 11.0, y + ROW_H / 2.0);
                 let caret = if menu.open { [(cx - 4.0, cy + 2.0), (cx + 4.0, cy + 2.0), (cx, cy - 2.5)] } else { [(cx - 4.0, cy - 2.0), (cx + 4.0, cy - 2.0), (cx, cy + 2.5)] };
@@ -846,7 +853,7 @@ impl PanelWindow {
                 self.hits.push((charge_box, PanelAction::ChargeMenu(!menu.open)));
             }
             if let Some(best) = state.recommended.as_ref().filter(|r| state.charge.as_ref() != Some(*r)) {
-                s.flat_text(&format!("use {best}"), &self.value_right, rect(w - PAD - 150.0, y, w - PAD, y + ROW_H), p.amber);
+                s.flat_text(&tf("panel.use", &[&best]), &self.value_right, rect(w - PAD - 150.0, y, w - PAD, y + ROW_H), p.amber);
             }
             y += ROW_H;
         }

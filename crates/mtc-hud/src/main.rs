@@ -10,8 +10,10 @@
 
 mod bundle;
 mod diag;
+mod failshots;
 mod fire;
 mod game_ref;
+mod hdr;
 mod latency;
 mod loading;
 mod locator;
@@ -31,7 +33,7 @@ mod worker;
 mod zip;
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use mtc_capture::readback::{Readback, Region};
@@ -138,6 +140,9 @@ const FIRE_KEY_WINDOW: Duration = Duration::from_millis(1500);
 /// change is seen on the first frame that has it (input says when to look; the screen says what
 /// the view is).
 const VIEW_KEY_WINDOW: Duration = Duration::from_millis(600);
+/// The readout gone this soon after it was read is a lost readout (a picture for the problem
+/// report), not the player leaving the gunner's seat a while ago.
+const READOUT_LOST_WITHIN: Duration = Duration::from_millis(2_000);
 /// From M to the game's frame with the new view before any press was measured (ms; measured
 /// in play: processed 44–74 ms after the key, the frame arriving at once).
 const VIEW_SWITCH_DEFAULT_MS: f64 = 40.0;
@@ -177,6 +182,8 @@ struct Flags {
     arrow_log: Option<std::path::PathBuf>,
     /// `--latency` (development): what the screen probe needs from the loop (`latency.rs`).
     latency: Option<Arc<std::sync::Mutex<latency::Shared>>>,
+    /// Captured in 16-bit colour (the game's display has HDR on): its SDR white level over 80 nits.
+    hdr_white: Option<f32>,
 }
 
 /// The V1 model log: one line per input event and per processed V1 frame, written unbuffered
@@ -206,6 +213,10 @@ struct Hud {
     capture_thread_named: bool,
     flags: Flags,
     readback: Readback,
+    /// Ordinary content's white in a 16-bit capture, as measured on the frames.
+    hdr: Option<hdr::HdrWhite>,
+    /// Another member's marker clicked on V1: selected once their markers are the targets.
+    pending_select: Option<(String, Instant)>,
     /// Aim readout box, then the three cue regions.
     regions: Vec<Region>,
     /// The readout's whole search area, read back from the same frame when its last place fails.
@@ -236,6 +247,9 @@ struct Hud {
     aim: AimReader,
     /// The readout's scale and line offset found on screen when the rule reads it poorly.
     readout_fit: readout_fit::ReadoutFitter,
+    /// Roblox's text size as the readout measures it (1 at its default): the loading UI's text and
+    /// the view cues' letters and hint row follow it.
+    text_factor: f32,
     cues: CueReader,
     maps: maps::MapPipeline,
     loading: loading::LoadingPipeline,
@@ -271,6 +285,8 @@ struct Hud {
     panel_hover: Option<String>,
     /// Each shot, its predicted landing and its X.
     shots: shots::ShotLog,
+    /// UPDATE GUN presses so far (for the shot records).
+    gun_updates: u32,
     /// Last right button press (a marker deletion needs one).
     last_right_click: Option<Instant>,
     /// The latest right click on V1 away from any marker (placing one) and where (frame px).
@@ -317,6 +333,10 @@ struct Hud {
     readout_seen_ms: Option<u64>,
     idle: bool,
     last_text: Option<(String, String)>,
+    /// When the readout was last read, and pictures of recent recognition failures for problem
+    /// reports.
+    last_read_at: Option<Instant>,
+    fail_shots: failshots::FailShots,
     stats: Stats,
 }
 
@@ -338,11 +358,17 @@ impl GraphicsCaptureApiHandler for Hud {
         if input.is_some() {
             loading.keys_live();
         }
+        let mut readback = Readback::new();
+        if let Some(white) = ctx.flags.hdr_white {
+            readback.set_white(white);
+        }
         Ok(Self {
             capture_thread_named: false,
             geometry: WindowGeometry::query(&ctx.flags.window).ok(),
+            hdr: ctx.flags.hdr_white.map(hdr::HdrWhite::new),
+            pending_select: None,
             flags: ctx.flags,
-            readback: Readback::new(),
+            readback,
             regions: Vec::new(),
             aim_area: [Region::default()],
             shift_regions: Vec::new(),
@@ -360,6 +386,7 @@ impl GraphicsCaptureApiHandler for Hud {
             seats: seats::SeatWatch::new(),
             aim: AimReader::new(),
             readout_fit: readout_fit::ReadoutFitter::new(mtc_vision::aim::TextScale::REFERENCE),
+            text_factor: 1.0,
             cues: CueReader::new(),
             maps: {
                 let mut maps = forced_map(maps::MapPipeline::new(true));
@@ -390,6 +417,7 @@ impl GraphicsCaptureApiHandler for Hud {
             map_hover: None,
             panel_hover: None,
             shots: shots::ShotLog::default(),
+            gun_updates: 0,
             last_right_click: None,
             last_place: None,
             last_snapshot: None,
@@ -418,6 +446,8 @@ impl GraphicsCaptureApiHandler for Hud {
             readout_seen_ms: None,
             idle: false,
             last_text: None,
+            last_read_at: None,
+            fail_shots: failshots::FailShots::default(),
             stats: Stats::new(),
         })
     }
@@ -434,6 +464,12 @@ impl GraphicsCaptureApiHandler for Hud {
         }
         let arrived = Instant::now();
         self.stats.frames_arrived += 1;
+        if let Some(hdr) = &mut self.hdr
+            && let Some(white) = hdr.update(arrived, || self.readback.take_peak())
+        {
+            self.readback.set_white(white);
+            log::info!("HDR: ordinary content's white measures {white:.2} on screen ({:.0} nits; the display reports {:.0})", white * 80.0, hdr.system * 80.0);
+        }
         // The game's frame interval from the frames' capture times (one frame per frame it draws,
         // at most one per composition), not from when they reach this callback (which a busy frame
         // loop delays). The drag follow's lead goes by it (`mtc_overlay::follow_lag_us`).
@@ -528,6 +564,7 @@ impl GraphicsCaptureApiHandler for Hud {
         if let Some(age) = frame_age {
             self.stats.frame_ages.push(age);
         }
+        let captured = frame_age.map(|age| Instant::now().checked_sub(Duration::from_secs_f64(age.max(0.0) / 1000.0)).unwrap_or_else(Instant::now));
         if self.geometry_checked.elapsed() > Duration::from_secs(1) {
             self.geometry = WindowGeometry::query(&self.flags.window).ok().or(self.geometry);
             self.geometry_checked = Instant::now();
@@ -561,6 +598,7 @@ impl GraphicsCaptureApiHandler for Hud {
             self.aim.set_line_offset(0);
             self.readout_fit.reset(self.aim_layout.readout_text());
             self.ui_text.set_factor(1.0);
+            self.text_factor = 1.0;
             self.cues = CueReader::for_placement(&placement);
             self.maps.set_placement(&placement);
             let l = self.aim_layout;
@@ -614,6 +652,20 @@ impl GraphicsCaptureApiHandler for Hud {
                 None => self.aim.read(&aim_view, bottom),
             };
             self.aim_present = !matches!(r, AimResult::Absent);
+            // The readout lost right after it was read, or seen but not made out: the region just
+            // read, for a problem report.
+            let now_s = self.started.elapsed().as_secs_f64();
+            let kind = match &r {
+                AimResult::Read(_) => {
+                    self.last_read_at = Some(Instant::now());
+                    None
+                }
+                AimResult::Unreadable { .. } => Some("readout-unread"),
+                AimResult::Absent => self.last_read_at.filter(|t| t.elapsed() <= READOUT_LOST_WITHIN).map(|_| "readout-lost"),
+            };
+            if let Some(kind) = kind.filter(|k| self.fail_shots.wants(k, now_s)) {
+                self.fail_shots.add(kind, now_s, &[&self.regions[0]]);
+            }
             r
         } else {
             AimResult::Absent
@@ -638,7 +690,9 @@ impl GraphicsCaptureApiHandler for Hud {
                 diag::note(diag::Event::ReadoutFit(fit.factor, fit.dy, fit.cost));
                 // A text size step up (not a rule a little off): the loading UI's text is as much
                 // larger.
-                self.ui_text.set_factor(if fit.factor >= readout_fit::TEXT_SIZE_RAISED { fit.factor } else { 1.0 });
+                self.text_factor = if fit.factor >= readout_fit::TEXT_SIZE_RAISED { fit.factor } else { 1.0 };
+                self.ui_text.set_factor(self.text_factor);
+                self.cues.set_text_factor(self.text_factor);
             }
         }
         let cues = self.cues.read_views(&views[1..probes_from], origin);
@@ -646,6 +700,7 @@ impl GraphicsCaptureApiHandler for Hud {
         if views.len() > probes_from && self.locator.take(&views[probes_from..], origin) {
             placement.located = self.locator.located(placement.layout);
             self.cues = CueReader::for_placement(&placement);
+            self.cues.set_text_factor(self.text_factor);
             self.maps.set_placement(&placement);
         }
         let cyc = self.stats.part(stats::Part::Decode, cyc);
@@ -681,6 +736,11 @@ impl GraphicsCaptureApiHandler for Hud {
         }
         if let Some((vk, _)) = self.view_key.filter(|&(_, at)| at.elapsed() >= VIEW_KEY_WINDOW) {
             log::info!("No view change within {} ms of {} ({})", if vk == VK_M { "M" } else { "X" }, VIEW_KEY_WINDOW.as_millis(), view_name(view));
+            // The view cues' regions (the full map's hint row, the minimap's M box), for a report.
+            let now_s = self.started.elapsed().as_secs_f64();
+            if self.fail_shots.wants("view-none", now_s) && self.regions.len() > 2 {
+                self.fail_shots.add("view-none", now_s, &[&self.regions[1], &self.regions[2]]);
+            }
             self.view_key = None;
         }
         self.last_view = Some(view);
@@ -769,17 +829,18 @@ impl GraphicsCaptureApiHandler for Hud {
             self.prefs.debug_map = false;
             self.prefs.save();
         }
+        // A report asked for from the notification area: the full one, on this frame.
+        if REPORT_ASKED.swap(0, Ordering::SeqCst) != 0 {
+            self.report_pending = true;
+        }
         if self.report_pending {
             self.report_pending = false;
             self.report_note = Some(match self.problem_report(frame, &placement, frame_size) {
-                // The zip selected in its folder, ready to drag into a chat.
                 Ok(zip) => {
-                    // Explorer takes the path quoted after the comma, not the switch quoted whole.
-                    use std::os::windows::process::CommandExt;
-                    let _ = std::process::Command::new("explorer").raw_arg(format!("/select,\"{}\"", zip.display())).spawn();
-                    "Saved as one zip, selected in the folder: send that file.".to_owned()
+                    show_in_explorer(&zip);
+                    mtc_overlay::lang::t("report.saved").to_owned()
                 }
-                Err(e) => format!("Could not save the report: {e}"),
+                Err(e) => mtc_overlay::lang::tf("report.failed", &[&e]),
             });
         }
         // The marks likewise: on the view now on screen with the last registration (a reopened V1
@@ -808,6 +869,7 @@ impl GraphicsCaptureApiHandler for Hud {
                 dragging: self.press.is_some(),
                 right_click: self.input.as_ref().map(|_| self.last_right_click.is_some_and(|t| t.elapsed() <= RIGHT_CLICK_WINDOW)),
                 placed: self.last_place.map(|(at, pos)| (at.saturating_duration_since(self.started).as_millis() as u64, pos)),
+                captured,
             };
             let remapped = (!placement.is_reference()).then(|| placement.map_remap(view, &region_view(&self.map_region), rect));
             let c = self.stats.part(stats::Part::Remap, c);
@@ -840,6 +902,10 @@ impl GraphicsCaptureApiHandler for Hud {
             let c = self.stats.part(stats::Part::Remap, c);
             let view = remapped.as_ref().map_or_else(|| region_view(&self.loading_region), |r| r.view());
             self.loading.process(&view, bottom, label_x(&result), cues.shows(mtc_vision::map::MapView::Full), now_ms);
+            let now_s = self.started.elapsed().as_secs_f64();
+            if self.loading.take_failure() && self.fail_shots.wants("loading-unread", now_s) {
+                self.fail_shots.add("loading-unread", now_s, &[&self.loading_region]);
+            }
             let [texts, weapon, decide] = std::mem::take(&mut self.loading.cost);
             self.stats.part_less(stats::Part::Loading, c, texts.0 + weapon.0 + decide.0);
             self.stats.add(stats::Part::LoadingTexts, texts);
@@ -875,6 +941,10 @@ impl GraphicsCaptureApiHandler for Hud {
         for action in self.flags.overlay.take_actions() {
             match action {
                 PanelAction::Select(label) => self.fire.select(&label),
+                PanelAction::Follow(letter) => {
+                    log::info!("Following {letter}'s markers (squad row)");
+                    self.maps.follow(letter);
+                }
                 // The shell and charge lists: one open at a time; a click elsewhere closes them.
                 PanelAction::Menu(open) => {
                     self.shell_list = open.then(|| self.loading.first_page());
@@ -898,7 +968,14 @@ impl GraphicsCaptureApiHandler for Hud {
                         self.charge_list_open = false;
                     }
                 },
-                PanelAction::UpdateGun => self.fire.update_gun(&self.maps),
+                PanelAction::UpdateGun => {
+                    self.fire.update_gun(&self.maps);
+                    self.gun_updates += 1;
+                    match (self.fire.gun(), self.fire.map()) {
+                        (Some(g), Some(m)) => log::info!("Gun updated by the player: x {:.1} m  y {:.1} m", g.map.0 * m.size_m(), g.map.1 * m.size_m()),
+                        _ => log::info!("Gun update pressed with no arrow seen"),
+                    }
+                }
                 PanelAction::Arc(high) => self.fire.choose_arc(high),
                 PanelAction::Hover(label) => self.panel_hover = label,
                 PanelAction::Terrain(open) => {
@@ -955,6 +1032,9 @@ impl GraphicsCaptureApiHandler for Hud {
                     if let mtc_overlay::Setting::DebugMap(on) = setting {
                         self.maps.choose_debug_map(on);
                     }
+                    if let mtc_overlay::Setting::Language(language) = setting {
+                        mtc_overlay::lang::set_language(language);
+                    }
                     if let mtc_overlay::Setting::Step(mtc_overlay::Stepper::DragOffset, _) = setting {
                         mtc_overlay::FOLLOW_OFFSET_US.store(i64::from(self.prefs.drag_offset_ms) * 1000, Ordering::Relaxed);
                     }
@@ -973,11 +1053,19 @@ impl GraphicsCaptureApiHandler for Hud {
         // marks mid-drag, and nothing to solve for changes meanwhile.
         let c = self.stats.part(stats::Part::Actions, c);
         let solved = if !self.maps.marker_dragging() && !self.maps.v1_moving() { self.fire.update(&self.maps, self.loading.shell()) } else { None };
+        // A clicked marker of the member followed now, once it is among the targets.
+        if let Some((label, at)) = &self.pending_select
+            && (self.fire.select_listed(label) || at.elapsed() > PENDING_SELECT_MAX)
+        {
+            self.pending_select = None;
+        }
         if let Some(took) = solved {
             self.stats.solves.0 += 1;
             self.stats.solves.1 += took;
         }
         let c = self.stats.part_n(stats::Part::Solve, c, u32::from(solved.is_some()));
+        let (seat_changes, driver_entries) = self.seats.seat_changes();
+        self.shots.note_counters(seat_changes, driver_entries, self.gun_updates);
         self.shots.update(now_ms, self.reading, &mut self.loading, &mut self.maps, &self.fire);
         for record in self.shots.take_records() {
             self.diag.add_shot(record);
@@ -1149,8 +1237,7 @@ impl Hud {
     /// seat menu with the names blacked out. The same files go into a zip beside the folder, whose
     /// path is returned.
     fn problem_report(&mut self, frame: &mut Frame, placement: &Placement, frame_size: (u32, u32)) -> Result<std::path::PathBuf, String> {
-        let dir = diag::dir().ok_or("no folder")?.join("reports").join(format!("report-{}", logfile::day_time_stamp()));
-        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let dir = report_dir(&diag::dir().ok_or("no folder")?)?;
         let l = placement.layout;
         let summary = format!(
             "MTC Calculator {} problem report, {}\nWindow client {}x{}, display scaling {}%, gun {}\nSettings: {:?}\n\nDescribe what went wrong and when (the log below has the seconds since start).\n",
@@ -1164,10 +1251,6 @@ impl Hud {
         );
         std::fs::write(dir.join("report.txt"), summary).map_err(|e| e.to_string())?;
         std::fs::write(dir.join("records.jsonl"), self.diag.run_lines(self.prefs.diag_settings()).join("\n") + "\n").map_err(|e| e.to_string())?;
-        if let Some(log) = logfile::get() {
-            let lines: Vec<String> = log.recent(logfile::RECENT).iter().map(|l| scrub_paths(l)).collect();
-            std::fs::write(dir.join("log.txt"), lines.join("\n") + "\n").map_err(|e| e.to_string())?;
-        }
         if self.prefs.report_screenshots {
             let bottom = placement.bottom_origin();
             let (lx, ly, lw, lh) = mtc_vision::loading::LOADING_REGION;
@@ -1193,35 +1276,17 @@ impl Hud {
                 }
                 let mut region = Region::default();
                 self.readback.read_region(frame, x, y, w as u32, h as u32, &mut region).map_err(|e| e.to_string())?;
-                let mut image = mtc_dataset::image::RgbImage::new(region.width, region.height);
-                for py in 0..region.height as usize {
-                    for px in 0..region.width as usize {
-                        let i = (py * region.width as usize + px) * 4;
-                        let o = (py * region.width as usize + px) * 3;
-                        if mask_from.is_some_and(|m| px as u32 >= m) {
-                            continue;
-                        }
-                        image.data[o] = region.data[i + 2];
-                        image.data[o + 1] = region.data[i + 1];
-                        image.data[o + 2] = region.data[i];
-                    }
+                failshots::image_of(&region, mask_from).save_png(&dir.join(format!("{name}.png"))).map_err(|e| e.to_string())?;
+            }
+            // Pictures of recent recognition failures, named by kind and the second (as the log).
+            for (kind, at_s, parts) in self.fail_shots.all() {
+                for (k, image) in parts.iter().enumerate() {
+                    let part = if parts.len() > 1 { format!("-{}", k + 1) } else { String::new() };
+                    image.save_png(&dir.join(format!("failed-{kind}-{at_s:.1}s{part}.png"))).map_err(|e| e.to_string())?;
                 }
-                image.save_png(&dir.join(format!("{name}.png"))).map_err(|e| e.to_string())?;
             }
         }
-        // The folder's files as one zip beside it: one file to send.
-        let mut files: Vec<(String, Vec<u8>)> = Vec::new();
-        for entry in std::fs::read_dir(&dir).map_err(|e| e.to_string())?.flatten() {
-            let path = entry.path();
-            if path.is_file() {
-                files.push((entry.file_name().to_string_lossy().into_owned(), std::fs::read(&path).map_err(|e| e.to_string())?));
-            }
-        }
-        files.sort_by(|a, b| a.0.cmp(&b.0));
-        let zip = dir.with_extension("zip");
-        zip::write_stored(&zip, &files).map_err(|e| e.to_string())?;
-        log::info!("Problem report: {} and {}", short_path(&dir), short_path(&zip));
-        Ok(zip)
+        finish_report(&dir)
     }
 
     /// Input since the last frame, while Roblox has focus: a left click on a marker or a selected
@@ -1333,6 +1398,16 @@ impl Hud {
             // Markers first: an objective counts here only when selected, else after them below.
             let hit = |m: &&mtc_overlay::MapMark| (!m.objective || m.selected) && (m.x - x).hypot(m.y - y) <= k * if m.objective { CLICK_OBJECTIVE_PX } else { CLICK_MARKER_PX };
             let label = marks.marks.iter().filter(hit).min_by(|a, b| (a.x - x).hypot(a.y - y).total_cmp(&(b.x - x).hypot(b.y - y))).map(|m| m.label.clone());
+            // Another member's marker: their markers become the targets, this one selected.
+            if label.is_none()
+                && let Some(other) = self.squad_marker_at(placement, self.screen_offset, (x, y))
+                && let Some(letter) = other.chars().next()
+            {
+                log::info!("Selected {other} (V1 click): following {letter}'s markers");
+                self.maps.follow(letter);
+                self.pending_select = Some((other, Instant::now()));
+                continue;
+            }
             let label = label.or_else(|| self.objective_at(placement, self.screen_offset, (x, y)));
             if let Some(label) = label {
                 log::info!("Selected target {label} (V1 click)");
@@ -1474,6 +1549,25 @@ impl Hud {
     }
 
     /// The objective whose icon is under a screen point on the map on screen.
+    /// The label of a marker of a letter not followed under (`x`, `y`) (screen px) on the map shown,
+    /// as the latest V1/V2 frame read it.
+    fn squad_marker_at(&self, placement: &Placement, offset: (i32, i32), (x, y): (f32, f32)) -> Option<String> {
+        let t = placement.map_transform_to_frame(self.maps.shown_transform(placement.bottom_origin())?);
+        let reach = CLICK_MARKER_PX * placement.map_marks_scale(t.view);
+        let following = self.maps.following();
+        self.maps
+            .labelled()
+            .iter()
+            .filter(|(label, _)| !label.starts_with(following))
+            .map(|(label, m)| {
+                let (fx, fy) = t.to_frame(m.0, m.1);
+                (label, (fx as f32 + offset.0 as f32 - x).hypot(fy as f32 + offset.1 as f32 - y))
+            })
+            .filter(|&(_, d)| d <= reach)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(label, _)| label.clone())
+    }
+
     fn objective_at(&self, placement: &Placement, offset: (i32, i32), (x, y): (f32, f32)) -> Option<String> {
         let t = placement.map_transform_to_frame(self.maps.shown_transform(placement.bottom_origin())?);
         let map = self.maps.map()?;
@@ -1717,17 +1811,17 @@ impl Hud {
             })
             .collect();
         let notice = if fire.map().is_none() {
-            Some("Open the map to identify it")
+            Some(mtc_overlay::lang::t("notice.open_map"))
         } else if !fire.gun_set() {
-            Some("Gun position unknown: show the map")
+            Some(mtc_overlay::lang::t("notice.gun_show_map"))
         } else if !fire.heights_settled() {
-            Some("Loading heightmap…")
+            Some(mtc_overlay::lang::t("notice.heightmap"))
         } else if fire.selected_label().is_none() {
             None
         } else if shell.is_none() {
-            Some("Load a shell for elevations")
+            Some(mtc_overlay::lang::t("notice.load_shell"))
         } else if selected.is_some_and(|(_, s)| s.low.is_none() && s.high.is_none()) {
-            Some("Out of range for this shell")
+            Some(mtc_overlay::lang::t("notice.out_of_range"))
         } else {
             None
         };
@@ -1765,6 +1859,94 @@ impl Hud {
             charge_menu: self.loading.charge_list(self.charge_list_open),
         }
     }
+}
+
+/// A problem report asked for from the notification area (ms since the Unix epoch; 0: none). The
+/// frame loop takes it on its next processed frame and makes the full report; when no frame comes
+/// (no Roblox window, or a capture with no frames) the main loop makes one without the screenshots.
+static REPORT_ASKED: AtomicU64 = AtomicU64::new(0);
+/// How long the main loop leaves an asked report to the frame loop while a capture runs (ms).
+const REPORT_FRAME_WAIT_MS: u64 = 3_000;
+
+fn unix_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
+}
+
+/// Asks for a problem report (the notification area's menu).
+pub fn ask_report() {
+    REPORT_ASKED.store(unix_ms().max(1), Ordering::SeqCst);
+}
+
+/// The asked report, taken by the main loop: at once with no capture running, else when the frame
+/// loop has not taken it within `REPORT_FRAME_WAIT_MS`; made without a frame (`reason` says why)
+/// and shown in Explorer.
+fn report_if_asked(capturing: bool, reason: &str) {
+    if !take_asked_report(capturing) {
+        return;
+    }
+    match diag::dir().ok_or_else(|| "no folder".to_owned()).and_then(|base| report_without_frame(&base, reason)) {
+        Ok(zip) => show_in_explorer(&zip),
+        Err(e) => log::warn!("Could not save the problem report: {e}"),
+    }
+}
+
+/// Takes the asked report for the main loop (`report_if_asked`): whether it is the main loop's to
+/// make now.
+fn take_asked_report(capturing: bool) -> bool {
+    let asked = REPORT_ASKED.load(Ordering::SeqCst);
+    if asked == 0 || (capturing && unix_ms().saturating_sub(asked) < REPORT_FRAME_WAIT_MS) {
+        return false;
+    }
+    REPORT_ASKED.compare_exchange(asked, 0, Ordering::SeqCst, Ordering::SeqCst).is_ok()
+}
+
+/// A new report folder under `base` (the diagnostics folder), named by the time.
+fn report_dir(base: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    let dir = base.join("reports").join(format!("report-{}", logfile::day_time_stamp()));
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir)
+}
+
+/// The report's last minutes of log (folders as their variables) and the folder's files as one zip
+/// beside it, whose path is returned.
+fn finish_report(dir: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    if let Some(log) = logfile::get() {
+        let lines: Vec<String> = log.recent(logfile::RECENT).iter().map(|l| scrub_paths(l)).collect();
+        std::fs::write(dir.join("log.txt"), lines.join("\n") + "\n").map_err(|e| e.to_string())?;
+    }
+    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
+    for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())?.flatten() {
+        let path = entry.path();
+        if path.is_file() {
+            files.push((entry.file_name().to_string_lossy().into_owned(), std::fs::read(&path).map_err(|e| e.to_string())?));
+        }
+    }
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    let zip = dir.with_extension("zip");
+    zip::write_stored(&zip, &files).map_err(|e| e.to_string())?;
+    log::info!("Problem report: {} and {}", short_path(dir), short_path(&zip));
+    Ok(zip)
+}
+
+/// A problem report with no game frame to read, under `base`: the version, why, the settings and
+/// the log.
+fn report_without_frame(base: &std::path::Path, reason: &str) -> Result<std::path::PathBuf, String> {
+    let dir = report_dir(base)?;
+    let summary = format!(
+        "MTC Calculator {} problem report, {}\n{reason}\nSettings: {:?}\n\nDescribe what went wrong and when (the log below has the seconds since start).\n",
+        env!("CARGO_PKG_VERSION"),
+        logfile::utc_day(),
+        prefs::Prefs::load().diag_settings()
+    );
+    std::fs::write(dir.join("report.txt"), summary).map_err(|e| e.to_string())?;
+    finish_report(&dir)
+}
+
+/// The report's zip selected in its folder, ready to drag into a chat.
+fn show_in_explorer(zip: &std::path::Path) {
+    // Explorer takes the path quoted after the comma, not the switch quoted whole.
+    use std::os::windows::process::CommandExt;
+    let _ = std::process::Command::new("explorer").raw_arg(format!("/select,\"{}\"", zip.display())).spawn();
 }
 
 /// Whether the screen point is on one of this process's windows (the HUD's panels).
@@ -2010,11 +2192,13 @@ fn replay(id: &str) {
         if placement.layout != map_layout {
             map_layout = placement.layout;
             cues = CueReader::for_placement(&placement);
+            cues.set_text_factor(text_factor);
             pipeline.set_placement(&placement);
         }
         if !locator.wanted(placement.layout).is_empty() && locator.take(&[view], origin) {
             placement.located = locator.located(placement.layout);
             cues = CueReader::for_placement(&placement);
+            cues.set_text_factor(text_factor);
             pipeline.set_placement(&placement);
         }
         let c = cues.read(&view, origin);
@@ -2072,6 +2256,7 @@ fn replay(id: &str) {
             aim.set_line_offset(fit.dy);
             log::info!("Angle readout fitted on screen ({:.1} s): text {:.3} times the rule's, value lines {:+} px (decode cost {})", meta.t_ms as f64 / 1000.0, fit.factor, fit.dy, fit.cost);
             text_factor = if fit.factor >= readout_fit::TEXT_SIZE_RAISED { fit.factor } else { 1.0 };
+            cues.set_text_factor(text_factor);
         }
         let key = (aim_layout.dpi, aim_layout.width, aim_layout.height);
         let count = aim_counts.entry(key).or_default();
@@ -2164,6 +2349,8 @@ fn replay(id: &str) {
             AimResult::Absent => None,
         };
         fire.predict(reading);
+        let (seat_changes, driver_entries) = seat_watch.seat_changes();
+        shot_log.note_counters(seat_changes, driver_entries, 0);
         shot_log.update(meta.t_ms, reading, &mut loading, &mut pipeline, &fire);
         if let (AimResult::Read(r), Some(p)) = (&result, fire.prediction()) {
             let text = format!("elevation {:>7}°  azimuth {}°  -> lands {:.0} m out, {:.1} s", r.elevation_text, r.azimuth_text, p.distance_m, p.time_s);
@@ -2228,6 +2415,11 @@ fn main() {
     if let Some(log) = logfile::start(Instant::now(), !cfg!(feature = "gui")) {
         log::info!("Log file: {}", log.path().display());
     }
+    // The language of the calculator's own text: the player's choice, else Windows' display
+    // language (before anything shows, the already-running notice included).
+    let language = prefs::Prefs::load().language.unwrap_or_else(mtc_overlay::lang::Language::of_windows);
+    mtc_overlay::lang::set_language(language);
+    log::info!("Language: {language:?}");
     // Hidden mode (development) draws nothing, so it may run beside the player's copy.
     let hidden = std::env::args().any(|a| a == "--hidden");
     if !hidden && already_running() {
@@ -2296,14 +2488,18 @@ fn main() {
         kept if kept.is_empty() => log::info!("{windows} · screen capture: every option available"),
         kept => log::info!("{windows} · screen capture keeps this system's defaults: {}", kept.join(", ")),
     }
+    log::info!("{}", mtc_capture::device::describe());
     let mut waiting_said = false;
     // Starts that failed in a row, and the last error (logged when it changes).
     let (mut failures, mut last_error, mut told) = (0u32, String::new(), false);
     // Windows titled like Roblox but not taken for it (logged when they change), and the window
     // last checked for administrator rights and the display.
     let (mut lookalikes, mut checked) = (Vec::new(), None);
+    // The game display's HDR state last logged.
+    let mut last_hdr: Option<Option<(bool, f32)>> = None;
     while !stop.load(Ordering::SeqCst) {
         let Some(window) = find_roblox() else {
+            report_if_asked(false, "No Roblox window found");
             if !waiting_said {
                 log::info!("Waiting for the Roblox window...");
                 waiting_said = true;
@@ -2320,20 +2516,31 @@ fn main() {
         };
         waiting_said = false;
         roblox_handle.store(window.as_raw_hwnd() as isize, Ordering::Relaxed);
+        let hwnd = windows::Win32::Foundation::HWND(window.as_raw_hwnd());
         if checked != Some(window.as_raw_hwnd() as isize) {
             checked = Some(window.as_raw_hwnd() as isize);
-            let hwnd = windows::Win32::Foundation::HWND(window.as_raw_hwnd());
-            match mtc_capture::window::display_hdr(hwnd) {
-                Some((true, nits)) => log::info!("The game's display has HDR on: ordinary content at {nits:.0} nits, so captured colours come out {:.2} times brighter", nits / 80.0),
-                Some((false, _)) => log::info!("The game's display has HDR off"),
-                None => log::info!("The game's display: HDR state unknown"),
-            }
             // Only logged: the check (the token can't be opened from here) is not confirmed on a
             // machine with Roblox elevated.
             if window.process_id().is_ok_and(mtc_capture::window::elevated_above_this) {
                 log::warn!("Roblox seems to run as administrator and the calculator does not");
             }
         }
+        // With HDR on, an 8-bit capture clips everything brighter than ordinary content's white
+        // (washed-out text the readers cannot read): the capture is taken in 16-bit colour and
+        // brought back to ordinary brightness (`Readback::set_white`).
+        let hdr = mtc_capture::window::display_hdr(hwnd);
+        if last_hdr != Some(hdr) {
+            match hdr {
+                Some((true, nits)) => log::info!("The game's display has HDR on (ordinary content at {nits:.0} nits): captured in 16-bit colour and brought back to ordinary brightness"),
+                Some((false, _)) => log::info!("The game's display has HDR off"),
+                None => log::info!("The game's display: HDR state unknown"),
+            }
+            last_hdr = Some(hdr);
+        }
+        let hdr_white = match hdr {
+            Some((true, nits)) => Some(nits / 80.0),
+            _ => None,
+        };
         let settings = Settings::new(
             window,
             support.cursor(),
@@ -2341,7 +2548,7 @@ fn main() {
             SecondaryWindowSettings::Default,
             support.interval(),
             DirtyRegionSettings::Default,
-            ColorFormat::Bgra8,
+            if hdr_white.is_some() { ColorFormat::Rgba16F } else { ColorFormat::Bgra8 },
             Flags {
                 window,
                 stop: stop.clone(),
@@ -2353,13 +2560,26 @@ fn main() {
                 v1_log: v1_log.clone(),
                 arrow_log: arrow_log.clone(),
                 latency: latency.clone(),
+                hdr_white,
             },
         );
         match Hud::start_free_threaded(settings) {
             Ok(capture) => {
                 (failures, told) = (0, false);
                 last_error.clear();
+                let mut hdr_checked = Instant::now();
                 while !capture.is_finished() && !stop.load(Ordering::SeqCst) {
+                    report_if_asked(true, "Capturing the Roblox window, but no frame was processed within 3 s (minimised, or the capture delivers nothing)");
+                    // HDR turned on or off, or the window moved to a display where it differs:
+                    // the capture starts again in the other colour format.
+                    if hdr_checked.elapsed() >= HDR_CHECK_INTERVAL {
+                        hdr_checked = Instant::now();
+                        let now = mtc_capture::window::display_hdr(hwnd);
+                        if now.is_some_and(|n| n.0) != hdr.is_some_and(|h| h.0) {
+                            log::info!("HDR {} on the game's display: the capture starts again", if now.is_some_and(|n| n.0) { "came on" } else { "went off" });
+                            break;
+                        }
+                    }
                     std::thread::sleep(Duration::from_millis(100));
                 }
                 let _ = capture.stop();
@@ -2371,6 +2591,7 @@ fn main() {
                     last_error.clone_from(&error);
                 }
                 failures += 1;
+                report_if_asked(false, &format!("The capture of the Roblox window fails to start: {error}"));
                 if failures >= CAPTURE_FAILURES_TOLD && !told {
                     told = true;
                     tell_capture_failed(error);
@@ -2385,6 +2606,12 @@ fn main() {
 /// Failed starts in a row before the player is told nothing can show (a window still coming up
 /// can fail once or twice).
 const CAPTURE_FAILURES_TOLD: u32 = 3;
+
+/// A clicked marker of another member waits this long to be among the targets.
+const PENDING_SELECT_MAX: Duration = Duration::from_secs(5);
+
+/// How often a running capture checks whether the game display's HDR state changed.
+const HDR_CHECK_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Which capture options this Windows lets the calculator change. Turning the yellow capture
 /// border off came with Windows 10 2104 and Windows 11, leaving the cursor out with Windows 10
@@ -2445,9 +2672,7 @@ impl CaptureSupport {
 fn tell_capture_failed(error: String) {
     use windows::Win32::UI::WindowsAndMessaging::{MB_ICONWARNING, MB_OK, MessageBoxW};
     std::thread::spawn(move || {
-        let text = windows::core::HSTRING::from(format!(
-            "MTC Calculator cannot capture the Roblox window, so nothing can show in the game.\n\n{error}\n\nPlease send the log folder to the developer: right-click the calculator's icon in the notification area at the bottom right of the screen, then Open log folder."
-        ));
+        let text = windows::core::HSTRING::from(mtc_overlay::lang::tf("dialog.capture_failed", &[&error]));
         unsafe { MessageBoxW(None, windows::core::PCWSTR(text.as_ptr()), windows::core::w!("MTC Calculator"), MB_OK | MB_ICONWARNING) };
     });
 }
@@ -2463,14 +2688,8 @@ fn already_running() -> bool {
     if unsafe { GetLastError() } != ERROR_ALREADY_EXISTS {
         return false;
     }
-    unsafe {
-        MessageBoxW(
-            None,
-            windows::core::w!("MTC Calculator is already running. Its icon is in the notification area at the bottom right of the screen."),
-            windows::core::w!("MTC Calculator"),
-            MB_OK | MB_ICONINFORMATION,
-        )
-    };
+    let text = windows::core::HSTRING::from(mtc_overlay::lang::t("dialog.already_running"));
+    unsafe { MessageBoxW(None, windows::core::PCWSTR(text.as_ptr()), windows::core::w!("MTC Calculator"), MB_OK | MB_ICONINFORMATION) };
     true
 }
 
@@ -2483,6 +2702,33 @@ mod report_tests {
         let line = format!("Log file: {local}\\MTC Calculator\\logs\\hud.log");
         let scrubbed = super::scrub_paths(&line);
         assert_eq!(scrubbed, "Log file: %LOCALAPPDATA%\\MTC Calculator\\logs\\hud.log");
+    }
+
+    /// A report asked for from the notification area: the main loop makes it at once with no
+    /// capture running, and leaves it to the frame loop for a while when one runs.
+    #[test]
+    fn an_asked_report_goes_to_the_frame_loop_first() {
+        use std::sync::atomic::Ordering;
+        super::ask_report();
+        assert!(!super::take_asked_report(true), "a capture runs: the frame loop's first");
+        assert!(super::take_asked_report(false), "no capture: at once");
+        assert!(!super::take_asked_report(false), "taken once");
+        super::REPORT_ASKED.store(super::unix_ms() - super::REPORT_FRAME_WAIT_MS - 1, Ordering::SeqCst);
+        assert!(super::take_asked_report(true), "no frame took it in time");
+    }
+
+    /// A report made with no frame: the summary with the reason, zipped beside its folder.
+    #[test]
+    fn a_report_without_a_frame_is_one_zip() {
+        let base = std::env::temp_dir().join(format!("mtc-report-test-{}", std::process::id()));
+        let zip = super::report_without_frame(&base, "No Roblox window found").expect("report");
+        let bytes = std::fs::read(&zip).expect("zip");
+        let folder = zip.with_extension("");
+        let summary = std::fs::read_to_string(folder.join("report.txt")).expect("summary");
+        let _ = std::fs::remove_dir_all(&base);
+        assert!(summary.contains("No Roblox window found") && summary.contains(env!("CARGO_PKG_VERSION")));
+        assert_eq!(&bytes[..4], b"PK\x03\x04");
+        assert!(bytes.windows(10).any(|w| w == b"report.txt"));
     }
 }
 

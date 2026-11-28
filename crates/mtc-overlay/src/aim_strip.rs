@@ -136,6 +136,8 @@ pub struct StripWindow {
     value: IDWriteTextFormat,
     value_left: IDWriteTextFormat,
     shown: Option<AimStrip>,
+    /// The language it was drawn in (a change redraws it).
+    drawn_in: crate::lang::Language,
     position: Option<(i32, i32, i32, i32)>,
 }
 
@@ -164,7 +166,7 @@ impl StripWindow {
         let label = surface.text_format(13.0, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER)?;
         let value = surface.text_format(18.0, DWRITE_FONT_WEIGHT_MEDIUM, DWRITE_TEXT_ALIGNMENT_CENTER)?;
         let value_left = surface.text_format(18.0, DWRITE_FONT_WEIGHT_MEDIUM, DWRITE_TEXT_ALIGNMENT_LEADING)?;
-        Ok(Self { hwnd, surface, label, value, value_left, shown: None, position: None })
+        Ok(Self { hwnd, surface, label, value, value_left, shown: None, drawn_in: crate::lang::Language::English, position: None })
     }
 
     /// The surface made again after a device loss (`Graphics::recover`), the shown strip redrawn.
@@ -184,7 +186,7 @@ impl StripWindow {
             }
             return Ok(());
         };
-        if self.shown.as_ref() == Some(strip) {
+        if self.shown.as_ref() == Some(strip) && self.drawn_in == crate::lang::language() {
             return Ok(());
         }
         // Window top sits so the elevation label line lands at its row inside the window.
@@ -195,6 +197,7 @@ impl StripWindow {
             self.position = Some(rect);
         }
         self.shown = Some(*strip);
+        self.drawn_in = crate::lang::language();
         Ok(())
     }
 
@@ -231,8 +234,8 @@ impl StripWindow {
 
             // Label line: the target, for reference.
             let target_text = match row.axis {
-                Axis::Elevation => format!("Target {:+.2}°", row.target),
-                Axis::Azimuth => format!("Target {:06.2}°", row.target.rem_euclid(360.0)),
+                Axis::Elevation => crate::lang::tf("aim.target", &[&format!("{:+.2}°", row.target)]),
+                Axis::Azimuth => crate::lang::tf("aim.target", &[&format!("{:06.2}°", row.target.rem_euclid(360.0))]),
             };
             s.label_text(&target_text, &self.label, D2D_RECT_F { left, top: label_y - 10.0, right, bottom: label_y + 10.0 }, if row.beyond_reach { amber } else { grey });
 

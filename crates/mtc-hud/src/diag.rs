@@ -18,7 +18,7 @@ use serde::Serialize;
 
 /// Bumped when what is collected grows, so the startup question comes back for players who
 /// agreed to an earlier version.
-pub const RECORD_VERSION: u32 = 2;
+pub const RECORD_VERSION: u32 = 3;
 /// Where the statistics go: the receiver on our own domain (`tools/diag/worker.js`; workers.dev
 /// is blocked in mainland China). `MTC_DIAG_URL` overrides it, for a local test receiver.
 const ENDPOINT: Option<&str> = Some("https://stats.mtc-calc.dev/");
@@ -77,10 +77,30 @@ pub struct ShotRecord {
     /// "screen": confirmed on screen; "backfill": a press the screen did not confirm, joined to
     /// its X afterwards.
     pub recorded: &'static str,
-    /// "x": its X seen; "no_x"; "no_x_under_icon": predicted under an objective icon; "no_prediction".
+    /// "x": its X seen; "x_far": an X off the prediction near its line of fire (`x`, `along_m`
+    /// and the rest from it); "no_x"; "no_x_under_icon": predicted under an objective icon;
+    /// "no_prediction".
     pub outcome: &'static str,
     /// The shot's number in this run.
     pub n: u32,
+    /// How far the readout moved over the 2 s before the shot (degrees).
+    pub elevation_moved: Option<f64>,
+    pub azimuth_moved: Option<f64>,
+    /// Since the previous shot: changes of the player's seat, entries into the driver's seat,
+    /// UPDATE GUN presses and how far the arrow moved (m).
+    pub seat_changes: u32,
+    pub driver_entries: u32,
+    pub gun_updates: u32,
+    pub gun_moved_m: Option<f64>,
+    /// The solution's gun position: how far from the arrow at the shot (m), and how many shots
+    /// were fired before this one since it last changed.
+    pub solution_gun_off_m: Option<f64>,
+    pub gun_age: Option<u32>,
+    /// The selected target (normalised map coordinates) and the elevation and azimuth the solution
+    /// gave for it.
+    pub target: Option<[f64; 2]>,
+    pub aim_elevation: Option<f64>,
+    pub aim_azimuth: Option<f64>,
 }
 
 /// A pick the player made by hand in the shell list: what ("shell", "charge", "gun"), the gun, the
@@ -647,6 +667,8 @@ mod tests {
             elevation: Some(14.96), azimuth: Some(187.49), sure: true, gun: Some([0.7965, 0.3184]), gun_view: Some("V3"), gun_px_per_m: Some(0.077),
             predicted: Some([0.742, 0.742]), predicted_m: Some(1415.4), predicted_s: Some(8.7), x: Some([0.742, 0.742]), x_px_per_m: Some(0.077),
             along_m: Some(1.9), across_m: Some(-7.1), late_s: Some(0.1), recorded: "screen", outcome: "x", n: 1,
+            elevation_moved: Some(0.0), azimuth_moved: Some(0.02), seat_changes: 0, driver_entries: 0, gun_updates: 1, gun_moved_m: Some(0.4),
+            solution_gun_off_m: Some(1.2), gun_age: Some(2), target: Some([0.742, 0.741]), aim_elevation: Some(14.97), aim_azimuth: Some(187.5),
         });
         let pending = dir.join("pending.jsonl");
         assert!(std::fs::read_to_string(&pending).unwrap().contains("\"along_m\":1.9"));

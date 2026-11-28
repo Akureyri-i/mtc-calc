@@ -30,22 +30,26 @@ use windows::Win32::Graphics::DirectWrite::{
 };
 
 use crate::panel::{PanelAction, inside, palette, rect};
+use crate::lang::t;
 use crate::render::{CapMetrics, Graphics, Surface, rgba};
 use crate::window;
 
 /// Window size at 150 % display scaling (physical pixels; `SettingsState::scale` times this on
 /// screen).
 pub const WIDTH: i32 = 880;
-const HEIGHT: i32 = 1236;
+const HEIGHT: i32 = 1044;
 const PAD: f32 = 32.0;
 const HEADER_H: f32 = 64.0;
 /// A section's caption, with the space above it.
 const CAPTION_H: f32 = 46.0;
-/// A setting: its name over a line saying what it does, the control at the right.
+/// A setting with a line under its name (when to use it), the control at the right.
 const ROW_H: f32 = 76.0;
-/// The map labels' setting: name and line, its four choices under them.
-const LABELS_ROW_H: f32 = 128.0;
-const FOOTER_H: f32 = 54.0;
+/// A setting its name and choices say all about.
+const SHORT_ROW_H: f32 = 56.0;
+/// The map labels' setting: its name, its five choices under it.
+const LABELS_ROW_H: f32 = 106.0;
+/// Space under the last setting.
+const BOTTOM_PAD: f32 = 24.0;
 const CONTROL_H: f32 = 42.0;
 /// A stepper: − and + buttons round the value.
 const STEP_W: f32 = 46.0;
@@ -152,6 +156,8 @@ pub enum Setting {
     ReportShots(bool),
     /// Take the private server's debug map as the map until a real one is identified.
     DebugMap(bool),
+    /// The language of the calculator's own text.
+    Language(crate::lang::Language),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -196,7 +202,7 @@ pub struct ConsentState {
 
 /// The question's card at 150 % (physical px).
 const CONSENT_W: f32 = 780.0;
-const CONSENT_H: f32 = 284.0;
+const CONSENT_H: f32 = 258.0;
 
 /// The gear: a 16 px wheel of eight teeth round a hub, outlined in `color`, centred at (`cx`, `cy`).
 pub(crate) fn gear(s: &Surface, cx: f32, cy: f32, color: D2D1_COLOR_F) -> windows::core::Result<()> {
@@ -257,6 +263,8 @@ pub struct SettingsWindow {
     surface: Surface,
     fonts: Fonts,
     shown: Option<SettingsState>,
+    /// The language it was drawn in (a change redraws it).
+    drawn_in: crate::lang::Language,
     placed: Option<(i32, i32)>,
     hover: Option<(i32, i32)>,
     hits: Vec<(D2D_RECT_F, PanelAction)>,
@@ -317,7 +325,7 @@ impl SettingsWindow {
             cell: font(15.5, DWRITE_FONT_WEIGHT_MEDIUM, DWRITE_TEXT_ALIGNMENT_CENTER)?,
             value: font(18.0, DWRITE_FONT_WEIGHT_MEDIUM, DWRITE_TEXT_ALIGNMENT_CENTER)?,
         };
-        Ok(Self { hwnd, surface, fonts, shown: None, placed: None, hover: None, hits: Vec::new(), pressed: None, scale: 1.0, consent: None })
+        Ok(Self { hwnd, surface, fonts, shown: None, drawn_in: crate::lang::Language::English, placed: None, hover: None, hits: Vec::new(), pressed: None, scale: 1.0, consent: None })
     }
 
     pub fn hwnd(&self) -> HWND {
@@ -394,19 +402,18 @@ impl SettingsWindow {
         self.surface.begin();
         self.surface.fill_rect(rect(0.0, 0.0, w, h), sh.card);
         self.surface.fill_rect(rect(0.0, 0.0, w, HEADER_H), sh.strip);
-        self.txt("Help improve the calculator", &self.fonts.title, PAD, w - PAD, HEADER_H / 2.0, p.white);
+        self.txt(t("consent.title"), &self.fonts.title, PAD, w - PAD, HEADER_H / 2.0, p.white);
         self.surface.fill_rect(rect(0.0, HEADER_H - 1.0, w, HEADER_H), sh.edge);
         let right = w - PAD;
-        self.txt("Send anonymous statistics to help tune the ballistics and the recognition?", &self.fonts.name, PAD, right, HEADER_H + 40.0, p.white);
-        self.txt("Shot angles and misses, recognition and performance numbers, sent now and then.", &self.fonts.line, PAD, right, HEADER_H + 76.0, sh.line);
-        self.txt("Plain numbers only: no screenshots, no player names. View or change it in Settings.", &self.fonts.line, PAD, right, HEADER_H + 102.0, sh.line);
+        self.txt(t("consent.question"), &self.fonts.name, PAD, right, HEADER_H + 40.0, p.white);
+        self.txt(t("consent.what"), &self.fonts.line, PAD, right, HEADER_H + 76.0, sh.line);
         let cy = h - PAD - CONTROL_H / 2.0;
-        self.cells(PAD, cy, 220.0, &[("Don't ask again", state.dont_ask, PanelAction::Consent(ConsentChoice::DontAsk(!state.dont_ask)))], true)?;
+        self.cells(PAD, cy, 220.0, &[(t("consent.dont_ask"), state.dont_ask, PanelAction::Consent(ConsentChoice::DontAsk(!state.dont_ask)))], true)?;
         let send = rect(right - 210.0, cy - CONTROL_H / 2.0, right, cy + CONTROL_H / 2.0);
         self.surface.fill_rect(send, if self.hovered(&send) { rgba(240, 190, 90, 1.0) } else { p.amber });
-        self.txt("Send statistics", &self.fonts.cell, send.left, send.right, cy, p.ink);
+        self.txt(t("consent.send"), &self.fonts.cell, send.left, send.right, cy, p.ink);
         self.hits.push((send, PanelAction::Consent(ConsentChoice::Send)));
-        self.cells(right - 210.0 - 12.0 - 150.0, cy, 150.0, &[("Not now", false, PanelAction::Consent(ConsentChoice::NotNow))], false)?;
+        self.cells(right - 210.0 - 12.0 - 150.0, cy, 150.0, &[(t("consent.not_now"), false, PanelAction::Consent(ConsentChoice::NotNow))], false)?;
         self.surface.stroke_rect(rect(0.5, 0.5, w - 0.5, h - 0.5), sh.edge, 1.0);
         self.surface.end()
     }
@@ -420,7 +427,7 @@ impl SettingsWindow {
             }
             return Ok(());
         };
-        if self.shown.as_ref() == Some(state) {
+        if self.shown.as_ref() == Some(state) && self.drawn_in == crate::lang::language() {
             return Ok(());
         }
         self.scale = state.scale;
@@ -432,6 +439,7 @@ impl SettingsWindow {
             self.placed = Some(at);
         }
         self.shown = Some(state.clone());
+        self.drawn_in = crate::lang::language();
         Ok(())
     }
 
@@ -538,10 +546,17 @@ impl SettingsWindow {
     }
 
     /// A setting's name and the line under it saying what it does, in the row starting at `y`.
-    fn named(&self, y: f32, name: &str, line: &str, right: f32) {
+    /// A setting's name in a row `row_h` tall starting at `y`, with the line under it when there is
+    /// one (the name centred in the row otherwise).
+    fn named(&self, y: f32, row_h: f32, name: &str, line: Option<&str>, right: f32) {
         let (p, sh) = (palette(), shades());
-        self.txt(name, &self.fonts.name, PAD, right, y + 27.0, p.white);
-        self.txt(line, &self.fonts.line, PAD, right, y + 52.0, sh.line);
+        match line {
+            Some(line) => {
+                self.txt(name, &self.fonts.name, PAD, right, y + 27.0, p.white);
+                self.txt(line, &self.fonts.line, PAD, right, y + 52.0, sh.line);
+            }
+            None => self.txt(name, &self.fonts.name, PAD, right, y + row_h / 2.0, p.white),
+        }
     }
 
     fn caption(&self, y: f32, text: &str) {
@@ -562,7 +577,12 @@ impl SettingsWindow {
 
         // Title strip: the gear, the title, the close cross.
         gear(&self.surface, PAD + 8.0, HEADER_H / 2.0, p.grey)?;
-        self.txt("Settings", &self.fonts.title, PAD + 28.0, w - HEADER_H, HEADER_H / 2.0, p.white);
+        self.txt(t("settings.title"), &self.fonts.title, PAD + 28.0, w - HEADER_H, HEADER_H / 2.0, p.white);
+        // The language, each named in itself, left of the close cross.
+        let languages: Vec<(&str, bool, PanelAction)> =
+            crate::lang::Language::ALL.iter().map(|&l| (l.name(), crate::lang::language() == l, PanelAction::Set(Setting::Language(l)))).collect();
+        let cell_w = 110.0;
+        self.cells(w - HEADER_H - 12.0 - cell_w * languages.len() as f32, HEADER_H / 2.0, cell_w, &languages, false)?;
         let close = rect(w - HEADER_H, 0.0, w, HEADER_H);
         if self.hovered(&close) {
             self.surface.fill_rect(close, p.hover);
@@ -576,109 +596,99 @@ impl SettingsWindow {
         let mut y = HEADER_H;
 
         // Aiming: when the strip turns green.
-        self.caption(y, "AIMING");
+        self.caption(y, t("settings.aiming"));
         y += CAPTION_H;
         let angle = state.mode == ToleranceMode::Angle;
-        self.named(y, "Aim tolerance", "When the aim indicator turns green.", right - 340.0);
-        self.cells(right - 340.0, y + ROW_H / 2.0, 170.0, &[
-            ("By angle", angle, PanelAction::Set(Setting::Mode(ToleranceMode::Angle))),
-            ("By miss distance", !angle, PanelAction::Set(Setting::Mode(ToleranceMode::Impact))),
+        self.named(y, SHORT_ROW_H, t("settings.tolerance"), None, right - 340.0);
+        self.cells(right - 340.0, y + SHORT_ROW_H / 2.0, 170.0, &[
+            (t("settings.by_angle"), angle, PanelAction::Set(Setting::Mode(ToleranceMode::Angle))),
+            (t("settings.by_miss"), !angle, PanelAction::Set(Setting::Mode(ToleranceMode::Impact))),
         ], false)?;
-        y += ROW_H;
+        y += SHORT_ROW_H;
         let steppers = if angle {
-            [
-                ("Elevation", "How far off the solution's elevation still counts as on target.", format!("±{:.2}°", state.angle.0)),
-                ("Azimuth", "How far off the solution's azimuth still counts as on target.", format!("±{:.2}°", state.angle.1)),
-            ]
+            [(t("settings.elevation_tolerance"), format!("±{:.2}°", state.angle.0)), (t("settings.azimuth_tolerance"), format!("±{:.2}°", state.angle.1))]
         } else {
-            [
-                ("Range miss", "How far short or long it may land, by the trajectory to the target.", format!("±{:.0} m", state.impact.0)),
-                ("Sideways miss", "How far left or right of the target it may land.", format!("±{:.0} m", state.impact.1)),
-            ]
+            [(t("settings.range_tolerance"), format!("±{:.0} m", state.impact.0)), (t("settings.lateral_tolerance"), format!("±{:.0} m", state.impact.1))]
         };
-        for (i, (name, line, value)) in steppers.iter().enumerate() {
+        for (i, (name, value)) in steppers.iter().enumerate() {
             rule(&self.surface, y);
-            self.named(y, name, line, right - 2.0 * STEP_W - STEP_VALUE_W - 16.0);
+            self.named(y, SHORT_ROW_H, name, None, right - 2.0 * STEP_W - STEP_VALUE_W - 16.0);
             let stepper = if i == 0 { Stepper::Elevation } else { Stepper::Azimuth };
-            self.stepper(right, y + ROW_H / 2.0, value, stepper, state.limits[i]);
-            y += ROW_H;
+            self.stepper(right, y + SHORT_ROW_H / 2.0, value, stepper, state.limits[i]);
+            y += SHORT_ROW_H;
         }
 
         // Ammunition.
-        self.caption(y, "AMMUNITION");
+        self.caption(y, t("settings.ammunition"));
         y += CAPTION_H;
         let nearest = state.rule == ChargeRule::NearestCharge;
-        self.named(y, "Charge advice", "Which charge to suggest when the loaded one can't reach.", right - 380.0);
-        self.cells(right - 380.0, y + ROW_H / 2.0, 190.0, &[
-            ("Closest charge", nearest, PanelAction::Set(Setting::Rule(ChargeRule::NearestCharge))),
-            ("Least gun travel", !nearest, PanelAction::Set(Setting::Rule(ChargeRule::LeastMove))),
+        self.named(y, SHORT_ROW_H, t("settings.charge_advice"), None, right - 380.0);
+        self.cells(right - 380.0, y + SHORT_ROW_H / 2.0, 190.0, &[
+            (t("settings.closest_charge"), nearest, PanelAction::Set(Setting::Rule(ChargeRule::NearestCharge))),
+            (t("settings.least_travel"), !nearest, PanelAction::Set(Setting::Rule(ChargeRule::LeastMove))),
         ], false)?;
-        y += ROW_H;
+        y += SHORT_ROW_H;
 
         // Map.
-        self.caption(y, "MAP");
+        self.caption(y, t("settings.map_section"));
         y += CAPTION_H;
-        self.named(y, "Map", "The debug map of a private server: used until a real map is recognised.", right - 300.0);
-        self.cells(right - 300.0, y + ROW_H / 2.0, 150.0, &[
-            ("Auto", !state.debug_map, PanelAction::Set(Setting::DebugMap(false))),
-            ("Debug map", state.debug_map, PanelAction::Set(Setting::DebugMap(true))),
+        self.named(y, ROW_H, t("settings.debug_map"), Some(t("settings.debug_map_line")), right - 260.0);
+        self.cells(right - 240.0, y + ROW_H / 2.0, 120.0, &[
+            (t("settings.off"), !state.debug_map, PanelAction::Set(Setting::DebugMap(false))),
+            (t("settings.on"), state.debug_map, PanelAction::Set(Setting::DebugMap(true))),
         ], false)?;
         y += ROW_H;
         rule(&self.surface, y);
-        self.named(y, "Predicted impact", "Where the loaded shell lands at the gun's current angles.", right - 240.0);
-        self.cells(right - 240.0, y + ROW_H / 2.0, 120.0, &[("Show", state.pred, PanelAction::Set(Setting::Pred(true))), ("Hide", !state.pred, PanelAction::Set(Setting::Pred(false)))], false)?;
-        y += ROW_H;
+        self.named(y, SHORT_ROW_H, t("settings.pred"), None, right - 240.0);
+        self.cells(right - 240.0, y + SHORT_ROW_H / 2.0, 120.0, &[(t("settings.show"), state.pred, PanelAction::Set(Setting::Pred(true))), (t("settings.hide"), !state.pred, PanelAction::Set(Setting::Pred(false)))], false)?;
+        y += SHORT_ROW_H;
         rule(&self.surface, y);
-        self.named(y, "Target labels on the big map", "What the small label beside each target shows. Blast: the selected one's, when its ring is too small.", right);
+        self.named(y, SHORT_ROW_H, t("settings.labels"), None, right);
         let l = state.labels;
         let field = |f: LabelField| PanelAction::Set(Setting::Label(f, !l.get(f)));
         let width = (right - PAD) / 5.0;
-        self.cells(PAD, y + 76.0 + CONTROL_H / 2.0, width, &[
-            ("Flight time", l.time, field(LabelField::Time)),
-            ("Elevation", l.elevation, field(LabelField::Elevation)),
-            ("Distance", l.distance, field(LabelField::Distance)),
-            ("Precision", l.precision, field(LabelField::Precision)),
-            ("Blast", l.blast, field(LabelField::Blast)),
+        self.cells(PAD, y + SHORT_ROW_H + CONTROL_H / 2.0, width, &[
+            (t("settings.label_time"), l.time, field(LabelField::Time)),
+            (t("settings.label_elevation"), l.elevation, field(LabelField::Elevation)),
+            (t("settings.label_distance"), l.distance, field(LabelField::Distance)),
+            (t("settings.label_precision"), l.precision, field(LabelField::Precision)),
+            (t("settings.label_blast"), l.blast, field(LabelField::Blast)),
         ], true)?;
         y += LABELS_ROW_H;
 
         // Calibration: values that start from what is measured on this machine.
-        self.caption(y, "CALIBRATION");
+        self.caption(y, t("settings.calibration"));
         y += CAPTION_H;
-        self.named(y, "Drag timing", "Moves the marks earlier or later if they lag or lead a dragged map.", right - 2.0 * STEP_W - STEP_VALUE_W - 16.0);
+        self.named(y, ROW_H, t("settings.drag"), Some(t("settings.drag_line")), right - 2.0 * STEP_W - STEP_VALUE_W - 16.0);
         let offset = match state.drag_offset_ms {
-            0 => "Auto".to_owned(),
+            0 => t("common.auto").to_owned(),
             ms => format!("{ms:+} ms").replace('-', "−"),
         };
         self.stepper(right, y + ROW_H / 2.0, &offset, Stepper::DragOffset, state.limits[2]);
         y += ROW_H;
 
         // Diagnostics: the statistics sent, a problem report, the logs.
-        self.caption(y, "DIAGNOSTICS");
+        self.caption(y, t("settings.diagnostics"));
         y += CAPTION_H;
         let (button_w, gap) = (150.0, 12.0);
-        self.named(y, "Share statistics", "Anonymous numbers only: no screenshots, no names.", right - 240.0 - gap - button_w);
-        self.cells(right - 240.0 - gap - button_w, y + ROW_H / 2.0, 120.0, &[
-            ("Send", state.share, PanelAction::Set(Setting::Share(true))),
-            ("Don't send", !state.share, PanelAction::Set(Setting::Share(false))),
+        self.named(y, SHORT_ROW_H, t("settings.share"), None, right - 240.0 - gap - button_w);
+        self.cells(right - 240.0 - gap - button_w, y + SHORT_ROW_H / 2.0, 120.0, &[
+            (t("settings.send"), state.share, PanelAction::Set(Setting::Share(true))),
+            (t("settings.dont_send"), !state.share, PanelAction::Set(Setting::Share(false))),
         ], false)?;
-        self.cells(right - button_w, y + ROW_H / 2.0, button_w, &[("View data", false, PanelAction::Diag(crate::panel::DiagAction::ViewData))], false)?;
+        self.cells(right - button_w, y + SHORT_ROW_H / 2.0, button_w, &[(t("settings.view_data"), false, PanelAction::Diag(crate::panel::DiagAction::ViewData))], false)?;
+        y += SHORT_ROW_H;
+        rule(&self.surface, y);
+        // What the last report did shows under its name.
+        self.named(y, ROW_H, t("settings.report"), state.report_note.as_deref(), right - 190.0 - gap - button_w);
+        self.cells(right - 190.0 - gap - button_w, y + ROW_H / 2.0, 190.0, &[(t("settings.screenshots"), state.report_shots, PanelAction::Set(Setting::ReportShots(!state.report_shots)))], true)?;
+        self.cells(right - button_w, y + ROW_H / 2.0, button_w, &[(t("settings.create_report"), false, PanelAction::Diag(crate::panel::DiagAction::CreateReport))], false)?;
         y += ROW_H;
         rule(&self.surface, y);
-        let report_line = state.report_note.as_deref().unwrap_or("Saves the last 10 minutes of logs for you to send us.");
-        self.named(y, "Problem report", report_line, right - 190.0 - gap - button_w);
-        self.cells(right - 190.0 - gap - button_w, y + ROW_H / 2.0, 190.0, &[("Screenshots", state.report_shots, PanelAction::Set(Setting::ReportShots(!state.report_shots)))], true)?;
-        self.cells(right - button_w, y + ROW_H / 2.0, button_w, &[("Create report", false, PanelAction::Diag(crate::panel::DiagAction::CreateReport))], false)?;
-        y += ROW_H;
-        rule(&self.surface, y);
-        self.named(y, "Log files", "Kept on this computer for 30 days.", right - button_w);
-        self.cells(right - button_w, y + ROW_H / 2.0, button_w, &[("Open folder", false, PanelAction::Diag(crate::panel::DiagAction::OpenLogs))], false)?;
-        y += ROW_H;
-
-        // Footer.
-        self.surface.fill_rect(rect(0.0, y + 10.0, w, y + 11.0), sh.rule);
-        self.txt("Changes apply at once and are kept.", &self.fonts.line, PAD, right, y + 10.0 + (FOOTER_H - 10.0) / 2.0, sh.line);
-        y += FOOTER_H;
+        self.named(y, SHORT_ROW_H, t("settings.logs"), None, right - button_w);
+        self.cells(right - button_w, y + SHORT_ROW_H / 2.0, button_w, &[(t("settings.open_folder"), false, PanelAction::Diag(crate::panel::DiagAction::OpenLogs))], false)?;
+        y += SHORT_ROW_H;
+        y += BOTTOM_PAD;
         debug_assert!((y - h).abs() < 0.5, "laid out {y} px of {h}");
         self.surface.stroke_rect(rect(0.5, 0.5, w - 0.5, h - 0.5), sh.edge, 1.0);
         self.surface.end()

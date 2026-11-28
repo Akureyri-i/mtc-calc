@@ -1,8 +1,8 @@
-//! The files the release program carries inside it (the `bundle` feature): the game's fonts and the
-//! wiki's ammunition data and weapon table in both editions, and in the offline edition every map's
-//! picture, heightmap and terrain layer and the terrain manifest. On start they are written where
+//! The files the release program carries inside it (the `bundle` feature): whatever the bundle
+//! folder holds of the game's fonts, the wiki's ammunition data and weapon table, and the maps'
+//! pictures, heightmaps and terrain layers with the terrain manifest. On start they are written where
 //! the program would otherwise download them (the data cache, the map cache, and a fonts folder next
-//! to them), each only when missing there, so a first start needs no download and the data's own
+//! to them), each only when missing there, so what is carried needs no download and the data's own
 //! updates are kept.
 
 use std::path::PathBuf;

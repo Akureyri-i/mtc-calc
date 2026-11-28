@@ -504,6 +504,8 @@ pub struct MapWindow {
     slots: std::cell::RefCell<std::collections::HashMap<String, usize>>,
     /// The marks as drawn (while following a drag, as they came).
     shown: Option<MapMarks>,
+    /// The language it was drawn in (a change redraws it).
+    drawn_in: crate::lang::Language,
     placed: Option<(i32, i32, i32)>,
     /// A drag being followed.
     following: Option<Following>,
@@ -731,7 +733,7 @@ impl MapWindow {
         let tag_first = with_metrics(surface.map_label_format(16.0, DWRITE_FONT_WEIGHT_BOLD, DWRITE_TEXT_ALIGNMENT_LEADING)?)?;
         let tag = with_metrics(surface.map_label_format(15.0, DWRITE_FONT_WEIGHT_BOLD, DWRITE_TEXT_ALIGNMENT_LEADING)?)?;
         let tag_right = with_metrics(surface.map_label_format(15.0, DWRITE_FONT_WEIGHT_BOLD, DWRITE_TEXT_ALIGNMENT_TRAILING)?)?;
-        Ok(Self { hwnd, surface, layered: false, side: MAX_SIDE, label, small, tag_first, tag, tag_right, slots: Default::default(), shown: None, placed: None, following: None, redraws: Default::default(), commits: 0 })
+        Ok(Self { hwnd, surface, layered: false, side: MAX_SIDE, label, small, tag_first, tag, tag_right, slots: Default::default(), shown: None, drawn_in: crate::lang::Language::English, placed: None, following: None, redraws: Default::default(), commits: 0 })
     }
 
     /// The drawings since the last call, by why.
@@ -849,7 +851,7 @@ impl MapWindow {
             }
             return Ok(false);
         };
-        if self.shown.as_ref() == Some(marks) {
+        if self.shown.as_ref() == Some(marks) && self.drawn_in == crate::lang::language() {
             return Ok(false);
         }
         self.fit(marks.size)?;
@@ -905,6 +907,7 @@ impl MapWindow {
             self.placed = Some(at);
         }
         self.shown = Some(marks.clone());
+        self.drawn_in = crate::lang::language();
         Ok(drew)
     }
 
@@ -987,14 +990,14 @@ impl MapWindow {
             }
             if let Some(p) = m.precision_m.filter(|_| marks.planning.is_none()) {
                 let coarse = p > marks.coarse_m;
-                let text = if coarse { format!("±{p:.1} m · zoom in") } else { format!("±{p:.1} m") };
+                let text = if coarse { crate::lang::tf("marks.coarse", &[&format!("{p:.1}")]) } else { format!("±{p:.1} m") };
                 // Mirrors the game's label below the marker point.
                 s.outlined_text(&text, &self.label, D2D_RECT_F { left: px + LABEL_LEFT, top: py - LABEL_BOTTOM - 3.0, right: px + 200.0, bottom: py - LABEL_TOP + 3.0 }, if coarse { amber } else { white }, outline);
             }
             // The blast circle hides under the diamonds: its size in words, a line lower.
             if let Some(blast) = marks.blast.filter(|b| marks.planning.is_none() && m.selected && b.spread_px.is_none() && b.reach_px < selected_half + STROKE) {
                 let line = 15.0;
-                let text = format!("blast {:.1} m", blast.reach_m);
+                let text = crate::lang::tf("marks.blast", &[&format!("{:.1}", blast.reach_m)]);
                 s.outlined_text(&text, &self.label, D2D_RECT_F { left: px + LABEL_LEFT, top: py - LABEL_BOTTOM - 3.0 + line, right: px + 200.0, bottom: py - LABEL_TOP + 3.0 + line }, white, outline);
             }
         }
@@ -1155,7 +1158,7 @@ impl MapWindow {
             if let Some(prec) = m.precision_m {
                 let coarse = prec > marks.coarse_m;
                 if fields.precision || coarse {
-                    first.push((if coarse { format!("±{prec:.1} m · zoom in") } else { format!("±{prec:.1} m") }, if coarse { amber } else { white }));
+                    first.push((if coarse { crate::lang::tf("marks.coarse", &[&format!("{prec:.1}")]) } else { format!("±{prec:.1} m") }, if coarse { amber } else { white }));
                 }
             }
             let mut lines = Vec::new();
@@ -1166,7 +1169,7 @@ impl MapWindow {
                 && fields.blast
                 && let Some(blast) = marks.blast
             {
-                lines.push(vec![(format!("blast {:.1} m", blast.reach_m), white)]);
+                lines.push(vec![(crate::lang::tf("marks.blast", &[&format!("{:.1}", blast.reach_m)]), white)]);
             }
             if lines.is_empty() {
                 continue;
@@ -1235,7 +1238,7 @@ impl MapWindow {
             s.ring(cx, cy, radius, white, 1.5);
             let caption = rgba(201, 208, 211, 1.0);
             let color = hover.charge.as_ref().map_or(dim, |(_, c)| charge_color(Some(*c)));
-            let charge_text = hover.charge.as_ref().map_or("out of range".to_owned(), |(n, _)| n.clone());
+            let charge_text = hover.charge.as_ref().map_or(crate::lang::t("common.out_of_range").to_owned(), |(n, _)| n.clone());
             // The arc in use carries the charge's colour, as the small label's flight time did.
             let arc_row = |name: &str, arc: Option<(f32, f32)>, used: bool| -> [(String, windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F); 3] {
                 [
@@ -1246,14 +1249,14 @@ impl MapWindow {
             };
             let mut rows: Vec<[(String, windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F); 3]> = vec![
                 [(hover.label.clone(), white), (charge_text, color), (format!("{:.1} km", hover.distance_m / 1000.0), white)],
-                arc_row("LOW", hover.low, !hover.high_chosen),
-                arc_row("HIGH", hover.high, hover.high_chosen),
+                arc_row(crate::lang::t("common.low"), hover.low, !hover.high_chosen),
+                arc_row(crate::lang::t("common.high"), hover.high, hover.high_chosen),
             ];
             let precision = m.precision_m.map(|p| {
                 let coarse = p > marks.coarse_m;
-                (if coarse { format!("±{p:.1} m · zoom in") } else { format!("±{p:.1} m") }, if coarse { amber } else { white })
+                (if coarse { crate::lang::tf("marks.coarse", &[&format!("{p:.1}")]) } else { format!("±{p:.1} m") }, if coarse { amber } else { white })
             });
-            let blast = marks.blast.map(|b| (format!("blast {:.1} m", b.reach_m), white));
+            let blast = marks.blast.map(|b| (crate::lang::tf("marks.blast", &[&format!("{:.1}", b.reach_m)]), white));
             let last = (precision.is_some() || blast.is_some()).then(|| {
                 let (p, pc) = precision.clone().unwrap_or((String::new(), white));
                 let (b, bc) = blast.clone().unwrap_or((String::new(), white));

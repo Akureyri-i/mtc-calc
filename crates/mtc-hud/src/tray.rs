@@ -1,5 +1,6 @@
 //! The notification-area icon. Outside the game the calculator has no window of its own, so the
-//! icon shows it is running and its menu opens the log folder and the licenses, or quits.
+//! icon shows it is running and its menu makes a problem report, opens the log folder and the
+//! licenses, or quits.
 
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -20,6 +21,7 @@ const ICON_ID: u32 = 1;
 const ID_LOGS: usize = 1;
 const ID_LICENSES: usize = 2;
 const ID_QUIT: usize = 3;
+const ID_REPORT: usize = 4;
 
 const LICENSES: &str = concat!(include_str!("../../../LICENSE"), "\n\n", include_str!("../../../THIRD_PARTY_NOTICES.md"));
 
@@ -121,10 +123,14 @@ fn menu(hwnd: HWND) {
     unsafe {
         let _ = AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, PCWSTR(title.as_ptr()));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
-        let _ = AppendMenuW(menu, MF_STRING, ID_LOGS, w!("Open log folder"));
-        let _ = AppendMenuW(menu, MF_STRING, ID_LICENSES, w!("Licenses"));
+        use mtc_overlay::lang::t;
+        for (id, text) in [(ID_REPORT, t("tray.report")), (ID_LOGS, t("tray.logs")), (ID_LICENSES, t("tray.licenses"))] {
+            let text = wide(text);
+            let _ = AppendMenuW(menu, MF_STRING, id, PCWSTR(text.as_ptr()));
+        }
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
-        let _ = AppendMenuW(menu, MF_STRING, ID_QUIT, w!("Quit"));
+        let quit = wide(mtc_overlay::lang::t("tray.quit"));
+        let _ = AppendMenuW(menu, MF_STRING, ID_QUIT, PCWSTR(quit.as_ptr()));
         let mut at = POINT::default();
         let _ = GetCursorPos(&mut at);
         // The menu closes on a click elsewhere only when its window is in front.
@@ -137,6 +143,10 @@ fn menu(hwnd: HWND) {
                 if let Some(dir) = crate::logfile::dir() {
                     let _ = std::process::Command::new("explorer").arg(dir).spawn();
                 }
+            }
+            ID_REPORT => {
+                log::info!("Problem report asked for from the notification area icon");
+                crate::ask_report();
             }
             ID_LICENSES => open_licenses(),
             ID_QUIT => {

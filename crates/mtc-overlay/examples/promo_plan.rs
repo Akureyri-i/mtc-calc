@@ -113,11 +113,12 @@ fn main() {
             }
         }),
         gun_set: true,
-        gun_source: Some("V1 arrow  ·  ±1.2 m".into()),
+        gun_source: Some(format!("{} · ±1.2 m", mtc_overlay::lang::t("gun.full_map"))),
         notice: None,
         terrain_open: true,
         settings_open: false,
         targets_open: true,
+        squad: None,
         scale,
     };
     let layer = render_plan(&roblox_font_dir(), &state).expect("render");

@@ -11,6 +11,7 @@
 mod aim_strip;
 mod charge_marks;
 mod clock;
+pub mod lang;
 mod map_marks;
 mod pace;
 mod panel;
@@ -32,7 +33,7 @@ pub use map_marks::{Blast, CHARGE_COLORS, DragMark, Hover, MapMark, MapMarks, NO
 pub use panel::{ConsentChoice, DiagAction, MenuItem, MenuPick, PanelAction, PanelArc, PanelLoad, PanelMenu, PanelSolution, PanelState, PanelTarget, WIDTH as PANEL_WIDTH};
 pub use map_marks::MARGIN as MAP_MARGIN;
 pub use settings::{ChargeRule, ConsentState, LabelField, LabelFields, Setting, SettingsState, Stepper, ToleranceMode, WIDTH as SETTINGS_WIDTH};
-pub use plan::{PlanArc, PlanChargeBox, PlanDetail, PlanNext, PlanRow, PlanState, PlanTerrain, ProfileArc, TerrainNote, LIMIT_HEIGHT as PLAN_LIMIT_HEIGHT, MAX_HEIGHT as PLAN_MAX_HEIGHT, WIDTH as PLAN_WIDTH};
+pub use plan::{PlanArc, PlanChargeBox, PlanDetail, PlanNext, PlanRow, PlanState, PlanTerrain, ProfileArc, SquadLetter, SquadRow, TerrainNote, LIMIT_HEIGHT as PLAN_LIMIT_HEIGHT, MAX_HEIGHT as PLAN_MAX_HEIGHT, WIDTH as PLAN_WIDTH};
 
 enum Command {
     Aim(Option<AimStrip>),

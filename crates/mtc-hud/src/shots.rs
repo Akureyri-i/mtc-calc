@@ -10,7 +10,14 @@
 //! precision of a finer one is the same spot, so the finer one is kept (V3 between V1 looks).
 //! An X joins the shot whose predicted landing is nearest in time, when it lands near the
 //! predicted point about when predicted. The miss is printed once the X has faded, from its
-//! sharpest sighting.
+//! sharpest sighting. An X no prediction explains that lands near a shot's line of fire after it
+//! was fired is kept as that shot's landing (off the prediction: a hit on something on the way,
+//! or a shell that flew otherwise than the readout says).
+//!
+//! Each record also says what surrounded the shot: how the readout moved just before it, the seat
+//! changes and UPDATE GUN presses since the previous shot, how far the arrow moved, and where the
+//! solution's gun and target stood (its gun moves only on UPDATE GUN or a finer sighting, so a
+//! player aiming with a stale gun shows here, not in the miss).
 
 use std::collections::VecDeque;
 
@@ -39,6 +46,54 @@ const JOIN_DISTANCE_SHARE: f64 = 0.15;
 const UNSEEN_AFTER_MS: f64 = 4_000.0;
 /// The X shows this long (ms) after the landing: it fades out in ~2 s (`impacts::FADE_PER_S`).
 const X_SHOWS_MS: f64 = 2_000.0;
+/// How the readout moved before a shot is taken over this long (ms).
+const STEADY_MS: u64 = 2_000;
+/// An X no prediction explains is a shot's off-prediction landing when it lands within this long
+/// after the shot (ms, a long flight) and this near its line of fire (m; at least, and as a share
+/// of the distance), at least `FAR_MIN_M` out.
+const FAR_WITHIN_MS: f64 = 60_000.0;
+const FAR_ACROSS_M: f64 = 60.0;
+const FAR_ACROSS_SHARE: f64 = 0.04;
+const FAR_MIN_M: f64 = 30.0;
+
+/// What surrounded a shot, for its record.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ShotContext {
+    /// How far the elevation and azimuth readout moved (largest minus smallest, degrees) over
+    /// `STEADY_MS` before the shot.
+    pub elevation_moved: Option<f64>,
+    pub azimuth_moved: Option<f64>,
+    /// Since the previous shot: changes of the player's seat, entries into the driver's seat and
+    /// UPDATE GUN presses.
+    pub seat_changes: u32,
+    pub driver_entries: u32,
+    pub gun_updates: u32,
+    /// How far the arrow moved since the previous shot (m).
+    pub gun_moved_m: Option<f64>,
+    /// How far the solution's gun position was from the arrow at the shot (m), and how many shots
+    /// were fired before this one since it last changed.
+    pub solution_gun_off_m: Option<f64>,
+    pub gun_age: Option<u32>,
+    /// The selected target (normalised map coordinates) and the elevation and azimuth the
+    /// solution gave for it.
+    pub target: Option<(f64, f64)>,
+    pub aim: Option<(f64, f64)>,
+}
+
+/// How far a series of readings moved over the `STEADY_MS` up to `at_ms`: elevation and azimuth
+/// (largest minus smallest, degrees; azimuths taken around the first, so 359° then 1° is 2°);
+/// `None` with fewer than two readings.
+fn moved(readings: &VecDeque<(u64, (f64, f64))>, at_ms: u64) -> (Option<f64>, Option<f64>) {
+    let window: Vec<(f64, f64)> = readings.iter().filter(|&&(t, _)| t <= at_ms && at_ms - t <= STEADY_MS).map(|&(_, r)| r).collect();
+    if window.len() < 2 {
+        return (None, None);
+    }
+    let range = |v: &[f64]| v.iter().copied().fold(f64::NEG_INFINITY, f64::max) - v.iter().copied().fold(f64::INFINITY, f64::min);
+    let a0 = window[0].1;
+    let elevations: Vec<f64> = window.iter().map(|r| r.0).collect();
+    let azimuths: Vec<f64> = window.iter().map(|r| a0 + ((r.1 - a0 + 540.0) % 360.0 - 180.0)).collect();
+    (Some(range(&elevations)), Some(range(&azimuths)))
+}
 
 /// One shot.
 #[derive(Clone, Debug)]
@@ -62,6 +117,9 @@ pub struct Shot {
     pub predicted: Option<Prediction>,
     /// The X it made, as last seen.
     pub impact: Option<Impact>,
+    /// An X off its prediction near its line of fire, kept as its landing when no X matched.
+    pub far: Option<(Impact, Miss)>,
+    pub context: ShotContext,
     /// Printed in full (the X faded) or given up on.
     pub done: bool,
 }
@@ -129,6 +187,15 @@ pub struct ShotLog {
     records: Vec<crate::diag::ShotRecord>,
     /// Shots numbered over the run (`Shot::n` restarts on each map).
     run_n: u32,
+    /// Seat changes, entries into the driver's seat and UPDATE GUN presses so far
+    /// (`note_counters`), and their values at the last shot.
+    counters: (u32, u32, u32),
+    counters_at_shot: (u32, u32, u32),
+    /// The arrow at the last shot, the solution's gun-change count then and the shots fired since
+    /// that changed.
+    arrow_at_shot: Option<(f64, f64)>,
+    gun_changes_at_shot: Option<u32>,
+    shots_since_gun_change: u32,
 }
 
 impl ShotLog {
@@ -138,8 +205,8 @@ impl ShotLog {
         let map = maps.map();
         if map.map(|m| m.id.clone()) != self.map {
             self.flush(fire);
-            let (records, run_n) = (std::mem::take(&mut self.records), self.run_n);
-            *self = ShotLog { map: map.map(|m| m.id.clone()), records, run_n, ..ShotLog::default() };
+            let (records, run_n, counters) = (std::mem::take(&mut self.records), self.run_n, self.counters);
+            *self = ShotLog { map: map.map(|m| m.id.clone()), records, run_n, counters, counters_at_shot: counters, ..ShotLog::default() };
         }
         if let Some(r) = reading {
             self.readings.push_back((now_ms, r));
@@ -200,12 +267,14 @@ impl ShotLog {
                     if late {
                         shot.done = true;
                         let outcome = match shot.predicted {
+                            _ if shot.far.is_some() => "x_far",
                             Some(p) if maps.objective_over(p.map).is_some() => "no_x_under_icon",
                             Some(_) => "no_x",
                             None => "no_prediction",
                         };
                         unseen.push((k, outcome));
                         match shot.predicted {
+                            _ if shot.far.is_some() => {}
                             Some(p) => match maps.objective_over(p.map) {
                                 Some(letter) => log::info!("Shot {}: due to land after {:.1} s, {:.0} m out, under objective {letter}'s icon; its X was not seen (hidden by the icon)", shot.n, p.time_s, p.distance_m),
                                 None => log::info!("Shot {}: due to land after {:.1} s, {:.0} m out; its X was not seen", shot.n, p.time_s, p.distance_m),
@@ -226,6 +295,12 @@ impl ShotLog {
         }
     }
 
+    /// The run's totals so far of seat changes, entries into the driver's seat and UPDATE GUN
+    /// presses.
+    pub fn note_counters(&mut self, seat_changes: u32, driver_entries: u32, gun_updates: u32) {
+        self.counters = (seat_changes, driver_entries, gun_updates);
+    }
+
     /// The settled shots' records since the last call.
     pub fn take_records(&mut self) -> Vec<crate::diag::ShotRecord> {
         std::mem::take(&mut self.records)
@@ -236,10 +311,15 @@ impl ShotLog {
         let shot = &self.shots[k];
         let Some(map) = fire.map() else { return };
         let size_m = map.size_m();
-        let m = match (&shot.impact, shot.predicted, shot.gun, shot.reading) {
+        // Its own X, else an X off the prediction near its line of fire.
+        let landing = shot.impact.as_ref().or(shot.far.as_ref().map(|(i, _)| i));
+        let m = match (landing, shot.predicted, shot.gun, shot.reading) {
             (Some(i), Some(p), Some(g), Some((_, azimuth))) => Some(miss(g.map, azimuth, &p, i.map, size_m, i.landed_ms as f64, shot.lands_ms().unwrap_or(0.0))),
             _ => None,
         };
+        let c = shot.context;
+        let r2 = |x: f64| (x * 100.0).round() / 100.0;
+        let r1 = |x: f64| (x * 10.0).round() / 10.0;
         let r3 = |x: f64| (x * 1000.0).round() / 1000.0;
         let r5 = |x: f64| (x * 100_000.0).round() / 100_000.0;
         self.run_n += 1;
@@ -270,14 +350,25 @@ impl ShotLog {
             predicted: shot.predicted.map(|p| [r5(p.map.0), r5(p.map.1)]),
             predicted_m: shot.predicted.map(|p| (p.distance_m * 10.0).round() / 10.0),
             predicted_s: shot.predicted.map(|p| (p.time_s * 100.0).round() / 100.0),
-            x: shot.impact.as_ref().map(|i| [r5(i.map.0), r5(i.map.1)]),
-            x_px_per_m: shot.impact.as_ref().map(|i| r3(i.scale / size_m)),
+            x: landing.map(|i| [r5(i.map.0), r5(i.map.1)]),
+            x_px_per_m: landing.map(|i| r3(i.scale / size_m)),
             along_m: m.map(|m| (m.along_m * 10.0).round() / 10.0),
             across_m: m.map(|m| (m.across_m * 10.0).round() / 10.0),
             late_s: m.map(|m| (m.late_s * 100.0).round() / 100.0),
             recorded: if shot.backfilled { "backfill" } else { "screen" },
             outcome,
             n: self.run_n,
+            elevation_moved: c.elevation_moved.map(r2),
+            azimuth_moved: c.azimuth_moved.map(r2),
+            seat_changes: c.seat_changes,
+            driver_entries: c.driver_entries,
+            gun_updates: c.gun_updates,
+            gun_moved_m: c.gun_moved_m.map(r1),
+            solution_gun_off_m: c.solution_gun_off_m.map(r1),
+            gun_age: c.gun_age,
+            target: c.target.map(|t| [r5(t.0), r5(t.1)]),
+            aim_elevation: c.aim.map(|a| r2(a.0)),
+            aim_azimuth: c.aim.map(|a| r2(a.1)),
         });
     }
 
@@ -295,7 +386,37 @@ impl ShotLog {
         let mut shot = self.shot_at(lit_ms, dark_ms, fire);
         shot.n = self.shots.len() as u32 + 1;
         self.print_fired(&shot, fire, "");
+        self.commit(&shot, fire);
         self.shots.push(shot);
+    }
+
+    /// A shot is on the record: what "since the previous shot" counts from.
+    fn commit(&mut self, shot: &Shot, fire: &FireControl) {
+        self.counters_at_shot = self.counters;
+        self.arrow_at_shot = shot.gun.map(|g| g.map);
+        let changes = fire.gun_changes();
+        self.shots_since_gun_change = if self.gun_changes_at_shot == Some(changes) { self.shots_since_gun_change + 1 } else { 1 };
+        self.gun_changes_at_shot = Some(changes);
+    }
+
+    /// What surrounds a shot laid at `lit_ms` from `gun`.
+    fn context(&self, lit_ms: u64, gun: Option<GunSighting>, fire: &FireControl) -> ShotContext {
+        let (elevation_moved, azimuth_moved) = moved(&self.readings, lit_ms);
+        let size_m = fire.map().map(|m| m.size_m());
+        let dist = |a: (f64, f64), b: (f64, f64)| size_m.map(|s| (a.0 - b.0).hypot(a.1 - b.1) * s);
+        let changes = fire.gun_changes();
+        ShotContext {
+            elevation_moved,
+            azimuth_moved,
+            seat_changes: self.counters.0.saturating_sub(self.counters_at_shot.0),
+            driver_entries: self.counters.1.saturating_sub(self.counters_at_shot.1),
+            gun_updates: self.counters.2.saturating_sub(self.counters_at_shot.2),
+            gun_moved_m: gun.zip(self.arrow_at_shot).and_then(|(g, a)| dist(g.map, a)),
+            solution_gun_off_m: gun.zip(fire.gun()).and_then(|(g, s)| dist(g.map, s.map)),
+            gun_age: fire.gun().map(|_| if self.gun_changes_at_shot == Some(changes) { self.shots_since_gun_change } else { 0 }),
+            target: fire.selected().map(|(a, _)| a.map),
+            aim: fire.aim(),
+        }
     }
 
     /// A shot fired between the reads at `lit_ms` and `dark_ms`: the readout then, the arrow, the
@@ -328,7 +449,8 @@ impl ShotLog {
         let shell = pick.map(|p| if p.charge_known { p.shell.name.clone() } else { p.shell.base_name() });
         let weapon = pick.map(|p| p.weapon.clone());
         let charge = pick.and_then(|p| p.loaded_charge()).map(|c| c.word());
-        Shot { n: 0, lit_ms, dark_ms, reading, unsure, shell, weapon, charge, backfilled: false, gun, predicted, impact: None, done: false }
+        let context = self.context(lit_ms, gun, fire);
+        Shot { n: 0, lit_ms, dark_ms, reading, unsure, shell, weapon, charge, backfilled: false, gun, predicted, impact: None, far: None, context, done: false }
     }
 
     fn print_fired(&self, shot: &Shot, fire: &FireControl, note: &str) {
@@ -382,9 +504,25 @@ impl ShotLog {
                 shot.backfilled = true;
                 self.print_fired(&shot, fire, " (not confirmed on screen at F; its X matched the prediction, recorded afterwards)");
                 shot.impact = Some(impact);
+                self.commit(&shot, fire);
                 self.shots.push(shot);
             }
-            None => log::info!("Impact #{}: no shot matches (none predicted to land near it about then)", impact.id),
+            None => match far_shot(&self.shots, &impact, size_m) {
+                Some((k, m)) => {
+                    log::info!(
+                        "Impact #{}: off shot {}'s prediction, {:.0} m out at azimuth {:.2}° ({:+.1} m along, {:+.1} m across, landed {:+.1} s against the prediction); kept as its landing",
+                        impact.id,
+                        self.shots[k].n,
+                        m.distance_m,
+                        m.azimuth,
+                        m.along_m,
+                        m.across_m,
+                        m.late_s
+                    );
+                    self.shots[k].far = Some((impact, m));
+                }
+                None => log::info!("Impact #{}: no shot matches (none predicted to land near it about then)", impact.id),
+            },
         }
     }
 
@@ -405,6 +543,26 @@ impl ShotLog {
             map.size_m() / impact.scale
         );
     }
+}
+
+/// The shot an X no prediction explains most likely is: fired before it landed (within
+/// `FAR_WITHIN_MS`), with no X of its own yet, the X near its line of fire and at least
+/// `FAR_MIN_M` out; of several, the one whose line passes nearest. With the X's miss from it.
+fn far_shot(shots: &[Shot], impact: &Impact, size_m: f64) -> Option<(usize, Miss)> {
+    let landed = impact.landed_ms as f64;
+    shots
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| !s.done && s.impact.is_none() && s.far.is_none())
+        .filter_map(|(k, s)| {
+            let (p, g, (_, azimuth)) = (s.predicted?, s.gun?, s.reading?);
+            if !(0.0..=FAR_WITHIN_MS).contains(&(landed - s.fired_ms())) {
+                return None;
+            }
+            let m = miss(g.map, azimuth, &p, impact.map, size_m, landed, s.lands_ms()?);
+            (m.distance_m >= FAR_MIN_M && m.across_m.abs() <= FAR_ACROSS_M.max(FAR_ACROSS_SHARE * m.distance_m)).then_some((k, m))
+        })
+        .min_by(|a, b| a.1.across_m.abs().total_cmp(&b.1.across_m.abs()))
 }
 
 /// "V1 arrow ±0.9 m": where a gun position came from and how sure it is.
@@ -436,5 +594,51 @@ mod tests {
         let p = Prediction { map: (0.2, 0.3), distance_m: 200.0, time_s: 2.0 };
         let m = miss(gun, 0.0, &p, (0.19, 0.3), size, 0.0, 0.0);
         assert!((m.across_m + 10.0).abs() < 0.1 && m.along_m.abs() < 0.5, "{m:?}");
+    }
+
+    /// The readout's movement before a shot: over the last 2 s only, azimuth across north counted
+    /// the short way.
+    #[test]
+    fn readout_movement_counts_the_last_two_seconds() {
+        let readings: VecDeque<(u64, (f64, f64))> = [(1_000, (9.0, 10.0)), (8_100, (5.90, 359.5)), (9_000, (5.93, 0.4)), (10_000, (5.93, 0.6))].into_iter().collect();
+        let (el, az) = moved(&readings, 10_000);
+        assert!((el.unwrap() - 0.03).abs() < 1e-9 && (az.unwrap() - 1.1).abs() < 1e-9, "{el:?} {az:?}");
+        assert_eq!(moved(&readings, 1_500), (None, None));
+    }
+
+    /// An X no prediction explains: kept for the shot whose line of fire it lies on (one landed
+    /// 240 m beyond its prediction), not for a shot fired after it landed nor one off the line.
+    #[test]
+    fn an_x_off_the_prediction_on_the_line_is_the_shots() {
+        let size = 3000.0;
+        let gun = GunSighting { map: (0.1, 0.5), mounted: true, scale: 1000.0, clipped: false, view: MapView::Full };
+        let shot = |n: u32, lit_ms: u64, azimuth: f64| Shot {
+            n,
+            lit_ms,
+            dark_ms: lit_ms + 100,
+            reading: Some((5.9, azimuth)),
+            unsure: None,
+            shell: None,
+            weapon: None,
+            charge: None,
+            backfilled: false,
+            gun: Some(gun),
+            // 2700 m east of the gun, landing after 7.4 s.
+            predicted: Some(Prediction { map: (1.0, 0.5), distance_m: 2700.0, time_s: 7.4 }),
+            impact: None,
+            far: None,
+            context: ShotContext::default(),
+            done: false,
+        };
+        let x = |landed_ms: u64, map: (f64, f64)| Impact { id: 1, map, scale: 1000.0, first_ms: landed_ms, last_ms: landed_ms, landed_ms, first_alpha: 1.2, last_alpha: 1.2, sightings: 1 };
+        // Shot 1 east, shot 2 north-east; an X 2940 m east, 8.5 s after shot 1.
+        let shots = vec![shot(1, 10_000, 90.0), shot(2, 11_000, 45.0)];
+        let (k, m) = far_shot(&shots, &x(18_550, (1.08, 0.5)), size).expect("shot 1");
+        assert_eq!(k, 0);
+        assert!((m.along_m - 240.0).abs() < 1.0 && m.across_m.abs() < 1.0 && (m.late_s - 1.1).abs() < 0.1, "{m:?}");
+        // Fired after it landed: not that shot.
+        assert!(far_shot(&shots[1..], &x(10_500, (1.08, 0.5)), size).is_none());
+        // 300 m off the line (beyond max(60 m, 4 % of 2940 m)): no shot.
+        assert!(far_shot(&shots[..1], &x(18_550, (1.08, 0.6)), size).is_none());
     }
 }

@@ -122,11 +122,12 @@ fn main() {
             terrain: None,
         }),
         gun_set: true,
-        gun_source: Some("V1 arrow  ·  ±0.9 m".into()),
+        gun_source: Some(format!("{} · ±0.9 m", mtc_overlay::lang::t("gun.full_map"))),
         notice: None,
         terrain_open: false,
         settings_open: false,
         targets_open: true,
+        squad: None,
         scale: 1.0,
     };
     let fonts = roblox_font_dir();

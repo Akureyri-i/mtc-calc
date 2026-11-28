@@ -20,7 +20,10 @@
 //! the game tens of milliseconds late). V1 is read every frame (diamonds only) so the target book
 //! follows; after the button comes up the captured frames still show the diamond moving for that
 //! delay, so the drag lasts until its diamond stands still (`DRAG_SETTLE_FRAMES`). The move is
-//! reported once at the end, with how far the captured diamond trailed the cursor.
+//! reported once at the end, with how far the captured diamond trailed the cursor. A press the
+//! game did not pick a marker up with (it lands on the player's own vehicle icon over the marker:
+//! the marker stays and the map does not pan) leaves the marker hint opaque, and the drag is
+//! dropped (`DragCheck`).
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -28,7 +31,7 @@ use std::time::{Duration, Instant};
 use mtc_maps::MapInfo;
 use mtc_vision::FrameView;
 use mtc_vision::map::arrow::{ArrowSighting, ClippedBlob, fit_clipped_blob_near, player_arrow_candidates_at};
-use mtc_vision::map::canvas::{V1Canvas, difference_px};
+use mtc_vision::map::canvas::{DRAG_THRESHOLD_PX, V1Canvas, difference_px};
 use mtc_vision::map::impacts::{Impact, ImpactSighting, ImpactTracker, read_impact_under, read_impacts_among};
 use mtc_vision::map::markers::{MarkerReader, MarkerSighting, minimap_spot_clear};
 use mtc_vision::map::targets::{MapFrame, Target, TargetBook, TargetEvent};
@@ -124,6 +127,10 @@ const MIN_FIT_SPREAD_PX: f64 = 40.0;
 const DRAG_SETTLE_FRAMES: u32 = 3;
 const DRAG_STILL_PX: f64 = 0.5;
 const DRAG_SETTLE_MAX: std::time::Duration = std::time::Duration::from_millis(1500);
+/// A marker drag is dropped after this many reads in a row showing the marker hint opaque with the
+/// cursor on the map, in frames captured after the cursor passed the drag threshold: the game did
+/// not pick the marker up (while it drags one the hint is translucent).
+const DRAG_NOT_TAKEN_READS: u32 = 2;
 /// The canvas is compared with each moving measurement as it was this long before it (ms), for
 /// the summary: the delay that fits best is the game's.
 const CANVAS_DELAYS_MS: [u64; 22] = [0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60, 64, 68, 72, 76, 80, 84];
@@ -166,6 +173,8 @@ pub struct MapInput {
     /// The latest right click on V1 away from any marker (placing one): when (ms since start)
     /// and where (frame px); the player's letter is learned from it.
     pub placed: Option<(u64, (f64, f64))>,
+    /// When the frame read was captured.
+    pub captured: Option<Instant>,
 }
 
 struct Library {
@@ -460,6 +469,42 @@ struct MarkerDrag {
     still: u32,
     /// Per read: how far the diamond was from the cursor plus the grab offset (px).
     trail_px: Vec<f64>,
+    /// Whether the game picked the marker up.
+    check: DragCheck,
+}
+
+/// Whether the game took a press for a marker drag, from V1's marker hint: translucent while it
+/// drags a marker, opaque when nothing was picked up. Reads count once the cursor has passed the
+/// drag threshold, from frames captured after that, with the cursor on the map (off it the hint is
+/// translucent anyway).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct DragCheck {
+    /// When the cursor was first seen past the drag threshold.
+    passed_at: Option<Instant>,
+    /// The hint read translucent once: the game has the marker.
+    taken: bool,
+    /// Opaque reads in a row.
+    opaque: u32,
+}
+
+impl DragCheck {
+    /// One read: the cursor's distance from the press (px), whether it is on the map, when the
+    /// frame was captured and the hint's reading. True once the game has not picked the marker up.
+    fn read(&mut self, moved_px: f64, on_map: bool, captured: Option<Instant>, dimmed: Option<bool>) -> bool {
+        if self.taken {
+            return false;
+        }
+        if self.passed_at.is_none() && moved_px > DRAG_THRESHOLD_PX {
+            self.passed_at = Some(Instant::now());
+        }
+        let after = self.passed_at.zip(captured).is_some_and(|(passed, captured)| captured >= passed);
+        match dimmed {
+            Some(true) => self.taken = true,
+            Some(false) if after && on_map => self.opaque += 1,
+            _ => self.opaque = 0,
+        }
+        self.opaque >= DRAG_NOT_TAKEN_READS
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1024,6 +1069,7 @@ impl MapPipeline {
             released_at: None,
             still: 0,
             trail_px: Vec::new(),
+            check: DragCheck::default(),
         });
     }
 
@@ -1183,6 +1229,38 @@ impl MapPipeline {
         self.book.targets()
     }
 
+    /// The letter whose markers are the targets (the player's unless another member's was chosen).
+    pub fn following(&self) -> char {
+        self.book.series()
+    }
+
+    /// The player's letter, once a marker they placed showed it.
+    pub fn own_letter(&self) -> Option<char> {
+        self.book.own()
+    }
+
+    /// Each letter on the map with its number of markers (recent V1/V2 frames).
+    pub fn letters_seen(&self) -> Vec<(char, u32)> {
+        self.book.letters_seen()
+    }
+
+    /// The labelled markers of the latest V1/V2 frame, every letter's (label, map position).
+    pub fn labelled(&self) -> &[(String, (f64, f64))] {
+        self.book.labelled()
+    }
+
+    /// Follows another member's markers (or the player's own again): the targets followed now go,
+    /// that letter's markers come in from the next V1/V2 frames.
+    pub fn follow(&mut self, letter: char) {
+        for e in self.book.follow(letter) {
+            match e {
+                TargetEvent::Removed(l) => log::info!("Target -{l}"),
+                TargetEvent::Follow(c) => log::info!("Following {c}'s markers (chosen); the targets followed before are dropped"),
+                _ => {}
+            }
+        }
+    }
+
     /// Takes the map view on screen from the cues (at `now_ms`). V1 opened again shows the whole
     /// map: the game resets its zoom to 1× on closing, so the canvas does too, rather than drawing
     /// the marks at the old zoom until two registrations agree (a 1× read against a zoomed canvas
@@ -1323,8 +1401,16 @@ impl MapPipeline {
         }
         lap("markers", &mut t);
         let mut settled = false;
+        let mut not_taken = false;
         match &mut self.marker_drag {
             Some(drag) => {
+                if view == MapView::Full && drag.released.is_none() {
+                    let c = MapView::Full.container();
+                    let (left, top) = (c.x + f64::from(origin.0), c.y + f64::from(origin.1));
+                    let on_map = cursor.is_some_and(|(x, y)| x >= left && x < left + c.size && y >= top && y < top + c.size);
+                    let moved = cursor.map_or(0.0, |(x, y)| (x - drag.pressed.0).hypot(y - drag.pressed.1));
+                    not_taken = drag.check.read(moved, on_map, input.captured, cues.hint_dimmed);
+                }
                 let seen = found.iter().find(|s| s.complete && s.label.as_deref() == Some(drag.label.as_str())).map(|s| s.frame);
                 if let (Some(s), Some(c)) = (seen, cursor) {
                     self.marker_sample = Some((c, s, transform));
@@ -1345,6 +1431,9 @@ impl MapPipeline {
                 let on = if view == MapView::Full { self.drawn().unwrap_or(transform) } else { transform };
                 self.update_offset(view, &on, &found);
             }
+        }
+        if not_taken && let Some(drag) = self.marker_drag.take() {
+            log::info!("Marker {} not picked up by the game (its marker hint stayed opaque): the drag is dropped", drag.label);
         }
         let spot = |m: (f64, f64)| minimap_spot_clear(frame, &transform, m);
         let events = self.book.observe(&MapFrame {
@@ -1416,7 +1505,8 @@ impl MapPipeline {
                     _ => log::info!("Target {l} moved"),
                 },
                 TargetEvent::Cleared => log::info!("Targets all cleared"),
-                TargetEvent::Series(letter) => log::info!("Own markers are the {letter} series (seen when placing one); markers taken as own before are dropped"),
+                TargetEvent::Series(letter) => log::info!("Own markers are the {letter} series (seen when placing one); the targets followed before are dropped"),
+                TargetEvent::Follow(letter) => log::info!("Following {letter}'s markers (chosen); the targets followed before are dropped"),
             }
         }
         // A dragged marker moves every read: the position line waits for other news.
@@ -1859,6 +1949,40 @@ fn signature(frame: &FrameView, t: &MapTransform) -> Vec<f32> {
 mod tests {
     use super::*;
 
+    /// The drag check: reads count from the cursor's passing the threshold, from frames captured
+    /// after it, with the cursor on the map; two opaque reads in a row drop the drag, and once the
+    /// hint read translucent the game has the marker for good.
+    #[test]
+    fn a_drag_the_game_did_not_take_is_dropped() {
+        let before = std::time::Instant::now();
+        let mut c = DragCheck::default();
+        // Not past the threshold yet: nothing counts.
+        assert!(!c.read(3.0, true, Some(std::time::Instant::now()), Some(false)));
+        assert!(!c.read(5.0, true, Some(std::time::Instant::now()), Some(false)));
+        // Past it: a frame captured before that moment does not count, later ones do.
+        assert!(!c.read(20.0, true, Some(before), Some(false)));
+        let after = std::time::Instant::now();
+        assert!(!c.read(30.0, true, Some(after), Some(false)));
+        assert!(c.read(40.0, true, Some(std::time::Instant::now()), Some(false)));
+
+        // Off the map or undecided breaks the run.
+        let mut c = DragCheck::default();
+        assert!(!c.read(20.0, true, Some(before), Some(false)));
+        let later = || Some(std::time::Instant::now());
+        assert!(!c.read(30.0, true, later(), Some(false)));
+        assert!(!c.read(40.0, false, later(), Some(false)));
+        assert!(!c.read(50.0, true, later(), None));
+        assert!(!c.read(60.0, true, later(), Some(false)));
+        assert!(c.read(70.0, true, later(), Some(false)));
+
+        // Translucent once: the game picked the marker up, opaque reads after it are fades.
+        let mut c = DragCheck::default();
+        assert!(!c.read(20.0, true, later(), Some(true)));
+        for _ in 0..5 {
+            assert!(!c.read(30.0, true, later(), Some(false)));
+        }
+    }
+
     /// The debug map given with `--map debug` (no reference picture, V1 at 1× from the input):
     /// the gun read on V1 at the 1000 m and 2000 m distance signs (a calibration recording) is
     /// 1000 m apart, as the signs are.
@@ -1918,7 +2042,7 @@ mod tests {
     /// a cue missed for a frame changes nothing.
     #[test]
     fn a_reopened_v1_is_back_at_1x() {
-        let cue = |v1: bool| ViewCues { ping_score: if v1 { 1.0 } else { 0.0 }, m_key_score: if v1 { 0.0 } else { 1.0 }, scope_black: 0.0, scope_lit: 0.0, remove_hint_lead: 0.0, m_key_min: 0.5 };
+        let cue = |v1: bool| ViewCues { ping_score: if v1 { 1.0 } else { 0.0 }, m_key_score: if v1 { 0.0 } else { 1.0 }, scope_black: 0.0, scope_lit: 0.0, remove_hint_lead: 0.0, hint_dimmed: None, m_key_min: 0.5 };
         let mut pipeline = MapPipeline::new(false);
         pipeline.canvas.correct(MapTransform::zoomed(MapView::Full, (0, 34), 2.4, (0.3, 0.3)), Instant::now());
         pipeline.see(&cue(true), 0);

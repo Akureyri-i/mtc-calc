@@ -243,6 +243,9 @@ pub struct FireControl {
     /// landscape maps leave transparent margins the range rings stay out of.
     picture: Shared<Mutex<(String, Option<[f64; 4]>)>>,
     gun: Option<GunSighting>,
+    /// How many times the gun position was taken or replaced (for the shot records: shots fired
+    /// since it last changed).
+    gun_changes: u32,
     aimpoints: Vec<Aimpoint>,
     selected: Option<String>,
     /// The player cleared the selection: none is picked for them until they pick one or place a
@@ -295,6 +298,7 @@ impl FireControl {
             heights: Shared::new(Mutex::new((String::new(), Heights::Loading))),
             picture: Shared::new(Mutex::new((String::new(), None))),
             gun: None,
+            gun_changes: 0,
             aimpoints: Vec::new(),
             selected: None,
             none_chosen: false,
@@ -440,6 +444,7 @@ impl FireControl {
             };
             if self.gun.as_ref().is_none_or(refines) {
                 self.gun = Some(arrow);
+                self.gun_changes += 1;
             }
         }
         self.set_aimpoints(maps, map);
@@ -483,7 +488,13 @@ impl FireControl {
     pub fn update_gun(&mut self, maps: &MapPipeline) {
         if let Some(arrow) = maps.arrow() {
             self.gun = Some(arrow);
+            self.gun_changes += 1;
         }
+    }
+
+    /// How many times the gun position was taken or replaced so far.
+    pub fn gun_changes(&self) -> u32 {
+        self.gun_changes
     }
 
     /// Selects a target by label; selecting the selected one again clears the selection (having
@@ -497,6 +508,16 @@ impl FireControl {
             self.selected = Some(label.to_owned());
             self.none_chosen = false;
         }
+    }
+
+    /// Selects `label` when it is among the targets (no toggling off); whether it was.
+    pub fn select_listed(&mut self, label: &str) -> bool {
+        let listed = self.aimpoints.iter().any(|a| a.label == label);
+        if listed {
+            self.selected = Some(label.to_owned());
+            self.none_chosen = false;
+        }
+        listed
     }
 
     pub fn map(&self) -> Option<&'static MapInfo> {

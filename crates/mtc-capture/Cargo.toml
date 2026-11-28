@@ -14,6 +14,7 @@ version = "0.62"
 features = [
   "Win32_Devices_Display",
   "Win32_Foundation",
+  "Win32_Graphics_Direct3D",
   "Win32_Graphics_Direct3D11",
   "Win32_Graphics_Dwm",
   "Win32_Graphics_Dxgi",
@@ -27,4 +28,4 @@ features = [
 
 [dev-dependencies.windows]
 version = "0.62"
-features = ["Win32_UI_Input_KeyboardAndMouse"]
+features = ["Win32_System_LibraryLoader", "Win32_UI_Input_KeyboardAndMouse"]

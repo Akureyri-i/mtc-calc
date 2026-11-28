@@ -11,6 +11,11 @@
 //!   (`MapFrame::placed`, a right click on V1 away from any marker): the label that appears at the
 //!   clicked spot, on a spot that showed no marker before. A until then; kept across rounds (the
 //!   squad stays). Learning a new letter drops the targets taken so far (another member's).
+//! - The book follows one letter at a time: the player's by default, another member's when chosen
+//!   (`follow`: a teammate marking for the player to fire at). Switching drops the targets of the
+//!   letter followed before; the chosen letter's markers come in from the next V1/V2 frames like
+//!   any new markers. Placing a marker of their own brings the book back to the player's letter,
+//!   and so does a new round.
 //! - At most `MAX_OWN` markers; placing one more removes the one with the smallest number.
 //! - A new marker gets the largest number on the map + 1 (A1 on an empty map). So a known label
 //!   placed again (seen at a new position) means every own marker numbered n or higher that was
@@ -66,6 +71,11 @@ use crate::map::markers::{CUT_LETTER, MarkerSighting};
 
 /// Most markers a player can have on the map.
 pub const MAX_OWN: usize = 6;
+/// The squad's letters: one per member, by joining order.
+pub const LETTERS: [char; 6] = ['A', 'B', 'C', 'D', 'E', 'F'];
+/// Each letter's markers are counted over the V1/V2 frames of this long (ms): a label hidden in
+/// one frame (another label over it) still counts.
+const LETTERS_MS: u64 = 2000;
 /// The player's letter until a placement shows it (alone, or the squad's creator).
 const DEFAULT_SERIES: char = 'A';
 /// A marker that appears within this long (ms) after the player placed one, at the clicked spot,
@@ -162,6 +172,9 @@ pub enum TargetEvent {
     /// The player's own letter, learned from a marker they placed; the targets of the
     /// letter assumed before are reported removed first.
     Series(char),
+    /// Another member's letter followed by choice (`TargetBook::follow`); the targets of the
+    /// letter followed before are reported removed first.
+    Follow(char),
 }
 
 /// What one frame shows of the map.
@@ -255,8 +268,14 @@ pub struct TargetBook {
     previous: Option<(MapTransform, Vec<(f64, f64)>)>,
     /// When a drag was last seen (ms).
     last_drag: Option<u64>,
-    /// The player's letter, once a placement showed it.
+    /// The letter followed: the player's (once a placement showed it) unless another was chosen.
     series: Option<char>,
+    /// The player's letter, once a placement showed it.
+    own: Option<char>,
+    /// Labels per letter in each recent V1/V2 frame (`LETTERS_MS`), by time.
+    letter_frames: std::collections::VecDeque<(u64, [u32; 6])>,
+    /// The labelled markers of the latest V1/V2 frame, every letter's: label, map position.
+    labelled: Vec<(String, (f64, f64))>,
     /// A placement waiting for its marker.
     placing: Option<Placing>,
     /// The click time of the last placement taken up.
@@ -272,16 +291,89 @@ impl TargetBook {
         self.targets.iter().find(|t| t.label == label)
     }
 
-    /// The player's letter: learned from a placement, A until then.
+    /// The letter followed: the player's (learned from a placement, A until then) unless another
+    /// member's was chosen.
     pub fn series(&self) -> char {
         self.series.unwrap_or(DEFAULT_SERIES)
     }
 
+    /// The player's letter, once a placement showed it.
+    pub fn own(&self) -> Option<char> {
+        self.own
+    }
+
     /// Forget everything (new round or map) but the player's letter: the squad outlasts a round.
+    /// The book follows the player's letter again.
     pub fn reset(&mut self) {
-        let series = self.series;
+        let own = self.own;
         *self = Self::default();
-        self.series = series;
+        self.own = own;
+        self.series = own;
+    }
+
+    /// Follows another letter: the targets of the one followed now are reported removed and that
+    /// letter's markers come in from the next V1/V2 frames. Nothing when it is followed already.
+    pub fn follow(&mut self, letter: char) -> Vec<TargetEvent> {
+        if letter == self.series() {
+            return Vec::new();
+        }
+        let mut events = Vec::new();
+        self.drop_targets(&mut events);
+        self.series = Some(letter);
+        events.push(TargetEvent::Follow(letter));
+        events
+    }
+
+    /// Each letter on the map with its number of markers, over the recent V1/V2 frames (the
+    /// followed letter at least as many as its targets).
+    pub fn letters_seen(&self) -> Vec<(char, u32)> {
+        let series = self.series();
+        LETTERS
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &letter)| {
+                let seen = self.letter_frames.iter().map(|f| f.1[i]).max().unwrap_or(0);
+                let n = if letter == series { seen.max(self.targets.len() as u32) } else { seen };
+                (n > 0).then_some((letter, n))
+            })
+            .collect()
+    }
+
+    /// The labelled markers of the latest V1/V2 frame, every letter's (label, map position).
+    pub fn labelled(&self) -> &[(String, (f64, f64))] {
+        &self.labelled
+    }
+
+    /// Reports every target removed and forgets what was waiting.
+    fn drop_targets(&mut self, events: &mut Vec<TargetEvent>) {
+        let mut gone: Vec<String> = self.targets.drain(..).map(|x| x.label).collect();
+        gone.sort_by_key(|l| number_of(l));
+        events.extend(gone.into_iter().map(TargetEvent::Removed));
+        self.pending.clear();
+        self.unnamed.clear();
+        self.disagreeing.clear();
+        self.hovered = None;
+        self.clear_pressed = None;
+        self.empty_since = None;
+        self.minimap_empty = 0;
+    }
+
+    /// Counts each letter's labels in a V1/V2 frame and keeps the labelled markers.
+    fn note_letters(&mut self, frame: &MapFrame) {
+        let mut counts = [0u32; 6];
+        self.labelled.clear();
+        for m in frame.markers {
+            let Some(label) = m.label.as_deref() else { continue };
+            let Some(i) = label.chars().next().and_then(|c| LETTERS.iter().position(|&l| l == c)) else { continue };
+            if number_of(label).is_some() {
+                counts[i] += 1;
+                self.labelled.push((label.to_owned(), m.map));
+            }
+        }
+        self.letter_frames.push_back((frame.t_ms, counts));
+        while self.letter_frames.front().is_some_and(|f| frame.t_ms.saturating_sub(f.0) > LETTERS_MS) {
+            self.letter_frames.pop_front();
+        }
     }
 
     /// Learns the player's letter from the marker that appears where they just placed one; on a
@@ -311,17 +403,11 @@ impl TargetBook {
         });
         let Some(letter) = letter else { return };
         self.placing = None;
+        // The player's letter, and the one followed from now on (placing a marker of their own,
+        // the player wants their own targets again).
+        self.own = Some(letter);
         if letter != self.series() {
-            let mut gone: Vec<String> = self.targets.drain(..).map(|x| x.label).collect();
-            gone.sort_by_key(|l| number_of(l));
-            events.extend(gone.into_iter().map(TargetEvent::Removed));
-            self.pending.clear();
-            self.unnamed.clear();
-            self.disagreeing.clear();
-            self.hovered = None;
-            self.clear_pressed = None;
-            self.empty_since = None;
-            self.minimap_empty = 0;
+            self.drop_targets(events);
             events.push(TargetEvent::Series(letter));
         }
         self.series = Some(letter);
@@ -394,6 +480,9 @@ impl TargetBook {
             self.last_drag = Some(frame.t_ms);
         }
         self.learn_series(frame, &mut events);
+        if t.view != MapView::Mini {
+            self.note_letters(frame);
+        }
         let series = self.series();
         // Own targets whose spot is in view with no diamond on it in this frame.
         let vacated: Vec<usize> = if t.view == MapView::Mini {
@@ -950,6 +1039,77 @@ mod tests {
         // The letter outlasts the round.
         book.reset();
         assert_eq!(book.series(), 'C');
+    }
+
+    /// Following a teammate's letter: the targets become that member's markers (the player's go),
+    /// every letter is counted with its markers; placing a marker of their own brings the player's
+    /// letter back, and so does a new round.
+    #[test]
+    fn another_members_markers_can_be_followed() {
+        let t = view();
+        let (mut book, mut now) = (TargetBook::default(), 0);
+        let squad = vec![
+            sighting(&t, spot(1), Some("C1")),
+            sighting(&t, spot(2), Some("C2")),
+            sighting(&t, spot(3), Some("B21")),
+            sighting(&t, spot(4), Some("B22")),
+            sighting(&t, spot(5), Some("B23")),
+        ];
+        // The player is C (learned from a placement).
+        let click = (now, spot(1));
+        for k in 0..3 {
+            let markers = if k == 0 { &squad[2..] } else { &squad[..] };
+            book.observe(&MapFrame { t_ms: now + 100 * k, transform: t, markers, remove_hint: false, dragging: false, right_click: Some(true), cursor: Some(spot(1)), client_origin: (0, 34), spot_clear: None, placed: Some(click) });
+        }
+        now += 300;
+        show(&mut book, &mut now, &squad);
+        assert_eq!((book.own(), book.series()), (Some('C'), 'C'));
+        assert_eq!(labels(&book), ["C1", "C2"]);
+        assert_eq!(book.letters_seen(), [('B', 3), ('C', 2)]);
+        assert_eq!(book.labelled().len(), 5);
+
+        assert_eq!(book.follow('B'), [TargetEvent::Removed("C1".into()), TargetEvent::Removed("C2".into()), TargetEvent::Follow('B')]);
+        assert!(book.follow('B').is_empty(), "followed already");
+        let events = show(&mut book, &mut now, &squad);
+        assert_eq!(labels(&book), ["B21", "B22", "B23"]);
+        assert_eq!(events.iter().filter(|e| matches!(e, TargetEvent::Added(_))).count(), 3);
+        assert_eq!((book.own(), book.series()), (Some('C'), 'B'));
+
+        // A new round: the player's letter again.
+        book.reset();
+        assert_eq!((book.own(), book.series()), (Some('C'), 'C'));
+
+        // Following B again, then the player places C3: back to C.
+        show(&mut book, &mut now, &squad);
+        book.follow('B');
+        show(&mut book, &mut now, &squad);
+        let click = (now, spot(6));
+        let mut with_c3 = squad.clone();
+        with_c3.push(sighting(&t, (spot(6).0 + 1.0, spot(6).1 - 1.0), Some("C3")));
+        let mut events = Vec::new();
+        for k in 0..4 {
+            let markers = if k == 0 { &squad[..] } else { &with_c3[..] };
+            events.extend(book.observe(&MapFrame { t_ms: now + 100 * k, transform: t, markers, remove_hint: false, dragging: false, right_click: Some(true), cursor: Some(spot(6)), client_origin: (0, 34), spot_clear: None, placed: Some(click) }));
+        }
+        assert!(events.contains(&TargetEvent::Series('C')), "{events:?}");
+        assert_eq!(book.series(), 'C');
+        assert_eq!(labels(&book), ["C1", "C2", "C3"]);
+    }
+
+    /// Before the player's letter is known the book follows A, as before; following another
+    /// letter does not make it the player's.
+    #[test]
+    fn following_is_not_learning_the_players_letter() {
+        let t = view();
+        let (mut book, mut now) = (TargetBook::default(), 0);
+        let squad = vec![sighting(&t, spot(1), Some("A1")), sighting(&t, spot(2), Some("B1"))];
+        show(&mut book, &mut now, &squad);
+        assert_eq!((book.own(), book.series()), (None, 'A'));
+        book.follow('B');
+        show(&mut book, &mut now, &squad);
+        assert_eq!((book.own(), labels(&book)), (None, vec!["B1".to_owned()]));
+        book.reset();
+        assert_eq!(book.series(), 'A');
     }
 
     /// A placement whose marker shows on a spot that already had one (another member's marker

@@ -38,6 +38,10 @@ fn roblox_font_dir() -> std::path::PathBuf {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut image = RgbImage::load_png(Path::new(&args[0])).expect("frame");
+    // `--zh`: the calculator's text in Chinese.
+    if args.iter().any(|a| a == "--zh") {
+        mtc_overlay::lang::set_language(mtc_overlay::lang::Language::Chinese);
+    }
     let full = args.get(2).is_none_or(|s| s == "full" || s == "compact" || s.starts_with("--"));
     let compact = args.get(2).is_some_and(|s| s == "compact");
     let aim: Option<(f64, f64)> = args.iter().position(|a| a == "--aim").and_then(|i| args.get(i + 1)).map(|v| {

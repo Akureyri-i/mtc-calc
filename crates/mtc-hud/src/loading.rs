@@ -153,6 +153,8 @@ pub struct LoadingPipeline {
     /// Cycles and calls of the costly steps since the frame loop last took them: card texts, the
     /// weapon name, deciding the weapon.
     pub cost: [(u64, u32); 3],
+    /// A loading's charge or shell was not read (`take_failure`).
+    failed: bool,
     bar: BarReader,
     reader: TextReader,
     /// Another display configuration than the reference is on screen (`set_reader`).
@@ -460,6 +462,7 @@ impl LoadingPipeline {
             weapon: None,
             last_weapon_read: None,
             cost: [(0, 0); 3],
+            failed: false,
             cards: Vec::new(),
             layout: None,
             last_read: None,
@@ -627,6 +630,12 @@ impl LoadingPipeline {
     /// A shot of a single-shot gun since the last call: the last read with the bar's slot lit and
     /// the first without (ms), the shot between them. Only artillery's: a weapon known not to be
     /// artillery (a tank's gun) is not recorded; one not recognised yet still is.
+    /// A loading whose charge or shell was not read since the last call (for the problem report's
+    /// pictures of failures).
+    pub fn take_failure(&mut self) -> bool {
+        std::mem::take(&mut self.failed)
+    }
+
     pub fn take_shot(&mut self) -> Option<(u64, u64)> {
         let shot = self.shot.take();
         shot.filter(|_| self.artillery || self.weapon.is_none())
@@ -887,6 +896,7 @@ impl LoadingPipeline {
                             let loaded = self.with_shown_charge(Loaded { slot: s, charge });
                             let known = self.charge_read(s) || loaded.charge == SlotCharge::None;
                             log::info!("Loading: slot {}{}", s + 1, if known { "" } else { " (its charge not read for this loading)" });
+                            self.failed |= !known;
                             self.note_loading(loaded, known);
                             self.pick(loaded, known);
                         }
@@ -899,6 +909,7 @@ impl LoadingPipeline {
                     let loaded = self.with_shown_charge(loaded);
                     let known = self.charge_read(loaded.slot) || loaded.charge == SlotCharge::None;
                     log::info!("Loaded: {}{}", self.describe(loaded), if known { "" } else { " (charge not read for this loading: shown as unknown)" });
+                    self.failed |= !known;
                     crate::diag::note(crate::diag::Event::Load);
                     self.note_loading(loaded, known);
                     self.pick(loaded, known);
@@ -1011,6 +1022,7 @@ impl LoadingPipeline {
                     Some(name) => log::info!("Ammo bar: slot {} · {} · icon {} → {name}", loaded.slot + 1, charge_name(loaded.charge), bar.kind.unwrap_or("")),
                     None => {
                         log::info!("Ammo bar: slot {} · {} · icon {} (shell not decided)", loaded.slot + 1, charge_name(loaded.charge), bar.kind.unwrap_or("not recognised"));
+                        self.failed = true;
                         self.current = None;
                     }
                 }
@@ -1028,12 +1040,13 @@ impl LoadingPipeline {
     /// name, `None` when the type is not read or does not decide.
     fn pick_by_kind(&mut self, bar: BarShell) -> Option<String> {
         let (Some(ammo), Some(weapon)) = (&self.ammo, &self.weapon) else { return None };
-        // The icon not read: the weapon's shells at this charge, when they all fly alike (the
+        // The icon not read, or read as a type the weapon has none of (the HESH icon is not in
+        // the library): the weapon's shells at this charge, when they all fly alike (the
         // TOS-1A's three rockets, whose icons the library has but the bar did not decide).
-        let candidates: Vec<&mtc_ammo::Shell> = match bar.kind {
-            Some(kind) => ammo.shells_of_kind(weapon, kind, level(bar.loaded.charge)),
-            None => ammo.shells(weapon).iter().filter(|s| s.charge() == level(bar.loaded.charge)).collect(),
-        };
+        let mut candidates: Vec<&mtc_ammo::Shell> = bar.kind.map_or_else(Vec::new, |kind| ammo.shells_of_kind(weapon, kind, level(bar.loaded.charge)));
+        if candidates.is_empty() {
+            candidates = self.alike_at(bar.loaded.charge);
+        }
         if candidates.is_empty() || !same_ballistics(&candidates) {
             return None;
         }
@@ -1050,6 +1063,19 @@ impl LoadingPipeline {
         let name = pick.shell.name.clone();
         self.current = Some(pick);
         Some(name)
+    }
+
+    /// The decided weapon's shells at `charge` when they all fly alike (the Centurion AVRE's one
+    /// shell, the TOS-1A's three rockets): the shell is known whatever its card or icon read.
+    /// Empty when the charge is not known (a weapon's shells without charges are not the ones of
+    /// an unread charge) or the shells differ.
+    fn alike_at(&self, charge: SlotCharge) -> Vec<&Shell> {
+        let (Some(ammo), Some(weapon)) = (&self.ammo, &self.weapon) else { return Vec::new() };
+        if charge == SlotCharge::Unknown {
+            return Vec::new();
+        }
+        let shells: Vec<&Shell> = ammo.shells(weapon).iter().filter(|s| s.charge() == level(charge)).collect();
+        if same_ballistics(&shells) { shells } else { Vec::new() }
     }
 
     /// A loaded slot whose charge read as none while a charge was shown on it before (the
@@ -1302,6 +1328,11 @@ impl LoadingPipeline {
         };
         // Even shells that fly alike at this charge: their families may not at the others.
         let shells = shells_of(loaded.slot, loaded.charge);
+        if shells.is_empty() {
+            // The card not read, or read as no name of the weapon's (small text: the Centurion
+            // AVRE's "L33A1" read "AP"): what the data leaves.
+            return self.alike_at(loaded.charge);
+        }
         if shells.len() < 2 {
             return shells;
         }
@@ -1510,7 +1541,7 @@ impl LoadingPipeline {
             ListPage::Shells => {
                 let weapon = self.weapon.as_ref()?;
                 let (read, _) = self.read_for_slot();
-                items.push(row("Auto".into(), None, Some(read.map_or("not read".to_owned(), |r| format!("read {r}"))), picked.is_none(), MenuPick::Auto));
+                items.push(row(mtc_overlay::lang::t("common.auto").into(), None, Some(read.map_or(mtc_overlay::lang::t("menu.not_read").to_owned(), |r| mtc_overlay::lang::tf("menu.read", &[&r]))), picked.is_none(), MenuPick::Auto));
                 let mut listed: Vec<String> = Vec::new();
                 for shell in ammo.shells(weapon) {
                     let base = shell.base_name();
@@ -1519,21 +1550,21 @@ impl LoadingPipeline {
                         listed.push(base);
                     }
                 }
-                items.push(row("Other gun".into(), None, None, false, MenuPick::More(0)));
+                items.push(row(mtc_overlay::lang::t("menu.other_gun").into(), None, None, false, MenuPick::More(0)));
             }
             ListPage::Guns(start) => {
                 let guns = self.gun_order();
                 if start > 0 {
-                    items.push(row("Back".into(), None, None, false, MenuPick::Back(Some(start.saturating_sub(GUNS_PER_PAGE)))));
+                    items.push(row(mtc_overlay::lang::t("menu.back").into(), None, None, false, MenuPick::Back(Some(start.saturating_sub(GUNS_PER_PAGE)))));
                 } else if self.weapon.is_some() {
-                    items.push(row("Shells".into(), None, None, false, MenuPick::Back(None)));
+                    items.push(row(mtc_overlay::lang::t("menu.shells").into(), None, None, false, MenuPick::Back(None)));
                 }
                 for gun in guns.iter().skip(start).take(GUNS_PER_PAGE) {
                     let detail = mtc_ammo::carriers(gun).first().cloned();
                     items.push(row(gun.clone(), None, detail, self.weapon.as_deref() == Some(gun.as_str()), MenuPick::Gun(gun.clone())));
                 }
                 if guns.len() > start + GUNS_PER_PAGE {
-                    items.push(row("More guns".into(), None, None, false, MenuPick::More(start + GUNS_PER_PAGE)));
+                    items.push(row(mtc_overlay::lang::t("menu.more_guns").into(), None, None, false, MenuPick::More(start + GUNS_PER_PAGE)));
                 }
             }
         }
@@ -1550,7 +1581,7 @@ impl LoadingPipeline {
         let slot = self.pick_slot();
         let picked = self.manual_charge.filter(|&(s, _)| s == slot).map(|(_, c)| c);
         let (_, read) = self.read_for_slot();
-        let mut items = vec![MenuItem { label: "Auto".into(), kind: None, detail: Some(read.map_or("not read".to_owned(), |c| format!("read {}", charge_word(c)))), current: picked.is_none(), pick: MenuPick::Charge(None) }];
+        let mut items = vec![MenuItem { label: mtc_overlay::lang::t("common.auto").into(), kind: None, detail: Some(read.map_or(mtc_overlay::lang::t("menu.not_read").to_owned(), |c| mtc_overlay::lang::tf("menu.read", &[&charge_word(c)]))), current: picked.is_none(), pick: MenuPick::Charge(None) }];
         for member in &shell.family {
             let Some(c) = member.charge() else { continue };
             items.push(MenuItem { label: charge_word(c).into(), kind: None, detail: None, current: picked == Some(c), pick: MenuPick::Charge(Some(c as u8)) });
@@ -1660,6 +1691,30 @@ mod tests {
         assert!(guns.iter().take(3).all(|g| mtc_ammo::calibre(g) == Some(155)), "the label's calibre first: {guns:?}");
         p.switch_weapon("152.4 mm 2A64");
         assert!(!p.weapon_by_hand && p.weapon.is_none(), "another weapon's label");
+    }
+
+    /// A weapon whose shells fly alike at the slot's charge has its shell whatever the card or the
+    /// bar's icon read; not at an unknown charge, nor where the shells differ.
+    #[test]
+    fn shells_that_fly_alike_need_no_card() {
+        let mut p = LoadingPipeline::new();
+        if p.ammo.is_none() {
+            eprintln!("skipped: no ammunition data on this machine");
+            return;
+        }
+        p.weapon = Some("L9A1 165mm".into());
+        p.cards = vec![Some(CardRead { name: "AP".into(), velocity: Some(239), charge: SlotCharge::None })];
+        let none = Loaded { slot: 0, charge: SlotCharge::None };
+        assert_eq!(p.candidates(none).iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["L33A1"], "card read wrong");
+        p.cards = vec![None];
+        assert_eq!(p.candidates(none).len(), 1, "card not read");
+        assert!(p.candidates(Loaded { slot: 0, charge: SlotCharge::Unknown }).is_empty(), "charge unknown");
+        assert_eq!(p.pick_by_kind(BarShell { loaded: none, kind: Some("HE") }).as_deref(), Some("L33A1"), "an icon type the gun has none of");
+
+        p.weapon = Some("155mm M284".into());
+        p.cards = vec![None, None];
+        assert!(p.candidates(low(1)).is_empty(), "M107 and M110 fly apart at Low");
+        assert!(p.pick_by_kind(BarShell { loaded: low(1), kind: Some("HESH") }).is_none());
     }
 
     /// A slot's charge counts for a loading unless the last menu read left it unread.

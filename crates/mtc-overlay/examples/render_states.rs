@@ -226,11 +226,12 @@ fn main() {
             terrain: None,
         }),
         gun_set: true,
-        gun_source: Some("V3 arrow  ·  ±6.1 m".into()),
+        gun_source: Some(format!("{} · ±6.1 m", mtc_overlay::lang::t("gun.minimap"))),
         notice: None,
         terrain_open: false,
         settings_open: false,
         targets_open: true,
+        squad: None,
         scale: 1.0,
     };
     for (name, state) in [("plan", plan.clone()), ("plan_notice", PlanState { rows: Vec::new(), shell: None, loaded_charge: None, detail: None, next: PlanNext::Nothing, notice: Some("Load a shell for charges and flight times".into()), gun_set: false, gun_source: None, ..plan })] {

@@ -64,6 +64,9 @@ pub struct Prefs {
     pub report_screenshots: bool,
     /// The debug map is taken as the map until a real one is identified (then back to automatic).
     pub debug_map: bool,
+    /// The language of the calculator's own text; `None`: Windows' display language.
+    #[serde(default)]
+    pub language: Option<mtc_overlay::lang::Language>,
     /// `DEFAULTS_VERSION` when the file was written (0: before it existed, so a file without it
     /// reads 0, not the new default's version).
     #[serde(default)]
@@ -79,6 +82,7 @@ impl Default for Prefs {
             consent_never: false,
             report_screenshots: false,
             debug_map: false,
+            language: None,
             panel_gunner_offset: None,
             panel_loader_offset: None,
             panel_gunner: None,
@@ -148,6 +152,7 @@ impl Prefs {
             }
             Setting::ReportShots(on) => self.report_screenshots = on,
             Setting::DebugMap(on) => self.debug_map = on,
+            Setting::Language(language) => self.language = Some(language),
             Setting::Step(stepper, steps) => match (stepper, self.tolerance_mode) {
                 (Stepper::Elevation, ToleranceMode::Angle) => self.tolerance_angle.0 = stepped(self.tolerance_angle.0, steps, ANGLE),
                 (Stepper::Azimuth, ToleranceMode::Angle) => self.tolerance_angle.1 = stepped(self.tolerance_angle.1, steps, ANGLE),

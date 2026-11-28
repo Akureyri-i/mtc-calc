@@ -3,7 +3,7 @@
 //! the full heightmap (trees as their crowns' tops, houses); whether the arc passes something
 //! taller than the terrain on the way.
 //!   cargo run --release -p mtc-hud --example shot_check -- <hud.log> <shells.json>
-//! CSV: shot,map,weapon,shell,elevation,azimuth,gun_x,gun_y,seen_m,logged_pred_m,terrain_m,full_m,lateral_m
+//! CSV: shot,map,weapon,shell,elevation,azimuth,gun_x,gun_y,seen_m,logged_pred_m,terrain_m,full_m,lateral_m,elevation_for_seen
 use std::collections::HashMap;
 
 fn shot_number(line: &str) -> u32 {
@@ -26,7 +26,7 @@ fn main() {
     // shot -> (map, weapon, shell, elevation, azimuth, gun, logged prediction)
     let mut shots: HashMap<u32, (&'static mtc_maps::MapInfo, String, String, f64, f64, (f64, f64), f64)> = HashMap::new();
     let mut heights: HashMap<String, (mtc_maps::Heightmap, Option<mtc_maps::Heightmap>)> = HashMap::new();
-    println!("shot,map,weapon,shell,elevation,azimuth,gun_x,gun_y,seen_m,logged_pred_m,terrain_m,full_m,lateral_m");
+    println!("shot,map,weapon,shell,elevation,azimuth,gun_x,gun_y,seen_m,logged_pred_m,terrain_m,full_m,lateral_m,elevation_for_seen");
     for line in log.lines() {
         if let Some(rest) = line.strip_prefix("Map: ") {
             let name = rest.split(" (").next().unwrap_or("").trim();
@@ -66,7 +66,21 @@ fn main() {
             let full = land(h);
             let terrain = t.as_ref().and_then(|t| land(t));
             let f = |v: Option<f64>| v.map_or(String::from(""), |x| format!("{x:.1}"));
-            println!("{n},{},{w},{shell},{el:.2},{az:.2},{:.1},{:.1},{seen:.1},{pred:.1},{},{},{}", m.id, g.0, g.1, f(terrain), f(full), lateral.map_or(String::new(), |l| format!("{l:.1}")));
+            // The elevation that lands at the seen distance over the terrain layer.
+            let seen_el = t.as_ref().map(|t| {
+                let base = t.height_m(gn.0, gn.1);
+                let ground = |x: f64| if x < 30.0 { f64::NEG_INFINITY } else { t.height_m(gn.0 + du * x / size, gn.1 + dv * x / size) - base };
+                let (mut lo, mut hi) = (el - 6.0, el + 6.0);
+                for _ in 0..60 {
+                    let mid = (lo + hi) / 2.0;
+                    match launch.impact(&s.projectile(), mid, ground) {
+                        Some((d, _)) if d < seen => lo = mid,
+                        _ => hi = mid,
+                    }
+                }
+                (lo + hi) / 2.0
+            });
+            println!("{n},{},{w},{shell},{el:.2},{az:.2},{:.1},{:.1},{seen:.1},{pred:.1},{},{},{},{}", m.id, g.0, g.1, f(terrain), f(full), lateral.map_or(String::new(), |l| format!("{l:.1}")), seen_el.map_or(String::new(), |e| format!("{e:.3}")));
         }
     }
 }

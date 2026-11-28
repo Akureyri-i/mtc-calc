@@ -123,20 +123,21 @@ pub fn plan_state(at: (i32, i32), sources: &PlanSources) -> PlanState {
         }
     });
     let gun_source = fire.gun().zip(map).map(|(g, map)| {
-        let view = match g.view {
-            mtc_vision::map::MapView::Full => "V1",
-            mtc_vision::map::MapView::Scope => "V2",
-            mtc_vision::map::MapView::Mini => "V3",
+        use mtc_overlay::lang::{t, tf};
+        let arrow = match g.view {
+            mtc_vision::map::MapView::Full => t("gun.full_map"),
+            mtc_vision::map::MapView::Scope => t("gun.scope_map"),
+            mtc_vision::map::MapView::Mini => t("gun.minimap"),
         };
-        let edge = if g.clipped { " edge" } else { "" };
-        format!("{view}{edge} arrow · ±{:.1} m", marks::gun_precision_m(map.size_m(), g.scale, g.clipped))
+        let arrow = if g.clipped { tf("gun.at_edge", &[&arrow]) } else { arrow.to_owned() };
+        format!("{arrow} · ±{:.1} m", marks::gun_precision_m(map.size_m(), g.scale, g.clipped))
     });
     let notice = if fire.map().is_none() {
-        Some("Identifying the map…")
+        Some(mtc_overlay::lang::t("notice.identifying"))
     } else if !fire.gun_set() {
-        Some("Gun position unknown: zoom in on your arrow")
+        Some(mtc_overlay::lang::t("notice.gun_zoom_in"))
     } else if !fire.heights_settled() {
-        Some("Loading heightmap…")
+        Some(mtc_overlay::lang::t("notice.heightmap"))
     } else {
         None
     };
@@ -168,7 +169,24 @@ pub fn plan_state(at: (i32, i32), sources: &PlanSources) -> PlanState {
         settings_open: false,
         scale: 1.0,
         targets_open: true,
+        squad: squad_row(sources.maps),
     }
+}
+
+/// The squad row: each letter with markers on the map (the followed one even without), when more
+/// than one letter is there to choose from.
+fn squad_row(maps: &MapPipeline) -> Option<mtc_overlay::SquadRow> {
+    let following = maps.following();
+    let own = maps.own_letter();
+    let mut letters = maps.letters_seen();
+    if !letters.iter().any(|&(l, _)| l == following) {
+        letters.push((following, 0));
+        letters.sort_by_key(|&(l, _)| l);
+    }
+    (letters.len() > 1).then(|| mtc_overlay::SquadRow {
+        letters: letters.into_iter().map(|(letter, markers)| mtc_overlay::SquadLetter { letter, markers, own: own == Some(letter) }).collect(),
+        following,
+    })
 }
 
 /// The plan panel's terrain section for the selected target: the profile, and what the
